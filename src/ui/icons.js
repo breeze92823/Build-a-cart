@@ -1,0 +1,28 @@
+// Inline SVG icons for the windows (viewBox 0 0 64 64, chunky outlines).
+export const ICONS = {
+  compass:
+    '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="#1a8cff" stroke="#0a2a6a" stroke-width="3"/><circle cx="32" cy="32" r="21" fill="#fff" stroke="#0a2a6a" stroke-width="2.5"/><path d="M32 13l6 19-6 4-6-4z" fill="#ff3a4a" stroke="#0a2a6a" stroke-width="2"/><path d="M32 51l-6-19 6-4 6 4z" fill="#9aa5b5" stroke="#0a2a6a" stroke-width="2"/></svg>',
+  chart:
+    '<svg viewBox="0 0 64 64"><path d="M6 50l14-12 9 7 17-20" fill="none" stroke="#0b3a0b" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 50l14-12 9 7 17-20" fill="none" stroke="#3ade3a" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path d="M38 18l14-4-3 15z" fill="#3ade3a" stroke="#0b3a0b" stroke-width="2.5" stroke-linejoin="round"/><rect x="4" y="50" width="12" height="9" rx="2" fill="#ffd23a" stroke="#4a3200" stroke-width="2"/></svg>',
+  cash:
+    '<svg viewBox="0 0 64 64"><path d="M6 30l30-14 22 14-30 16z" fill="#2fbf4a" stroke="#0b3a14" stroke-width="3" stroke-linejoin="round"/><path d="M6 30v8l22 16 30-16v-8L28 46z" fill="#1d8a34" stroke="#0b3a14" stroke-width="3" stroke-linejoin="round"/><path d="M24 22l20 12" stroke="#ffd23a" stroke-width="7"/><path d="M24 22l20 12" stroke="#ff9a1a" stroke-width="2"/><circle cx="34" cy="31" r="5" fill="#7dff8a" stroke="#0b3a14" stroke-width="2"/></svg>',
+  book:
+    '<svg viewBox="0 0 64 64"><path d="M6 20l28-12 24 14-28 14z" fill="#e8f2ff" stroke="#0a1a3a" stroke-width="3" stroke-linejoin="round"/><path d="M6 20v14l24 16 28-14V22L30 36z" fill="#2a6ae0" stroke="#0a1a3a" stroke-width="3" stroke-linejoin="round"/><path d="M12 24l18 11" stroke="#9fc4ff" stroke-width="2"/></svg>',
+  scroll:
+    '<svg viewBox="0 0 64 64"><path d="M14 46L44 10l10 8-30 36z" fill="#f4dcb0" stroke="#3a1a08" stroke-width="3" stroke-linejoin="round"/><circle cx="16" cy="48" r="9" fill="#ff7a4a" stroke="#3a1a08" stroke-width="3"/><circle cx="49" cy="14" r="7" fill="#ff7a4a" stroke="#3a1a08" stroke-width="3"/><path d="M26 40l14-16" stroke="#c99a5a" stroke-width="3"/></svg>',
+  floppy:
+    '<svg viewBox="0 0 64 64"><path d="M8 8h40l8 8v40H8z" fill="#3a8cff" stroke="#0a1a4a" stroke-width="3" stroke-linejoin="round"/><rect x="18" y="8" width="24" height="16" fill="#e8f2ff" stroke="#0a1a4a" stroke-width="3"/><rect x="34" y="11" width="5" height="10" fill="#3a8cff"/><rect x="15" y="32" width="34" height="20" rx="2" fill="#fff" stroke="#0a1a4a" stroke-width="3"/><path d="M20 39h24M20 45h18" stroke="#ff5a7a" stroke-width="3"/></svg>',
+  rebirth:
+    '<svg viewBox="0 0 64 64"><path d="M8 34a24 24 0 0 1 48 0z" fill="#ff3a5a" stroke="#2a0010" stroke-width="3"/><path d="M8 34a24 24 0 0 0 48 0z" fill="#fff" stroke="#2a0010" stroke-width="3"/><path d="M8 34h48" stroke="#2a0010" stroke-width="5"/><circle cx="32" cy="34" r="8" fill="#fff" stroke="#2a0010" stroke-width="4"/><path d="M18 14a20 20 0 0 1 30 2" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/></svg>',
+  lock:
+    '<svg viewBox="0 0 64 64"><path d="M20 28v-8a12 12 0 0 1 24 0v8" fill="none" stroke="#3a3f48" stroke-width="7"/><path d="M20 28v-8a12 12 0 0 1 24 0v8" fill="none" stroke="#c9ccd2" stroke-width="3"/><rect x="12" y="26" width="40" height="32" rx="6" fill="#ffb31a" stroke="#5a3a00" stroke-width="3"/><circle cx="32" cy="40" r="5" fill="#8a4a00"/><path d="M32 42v8" stroke="#8a4a00" stroke-width="4" stroke-linecap="round"/></svg>',
+  dice:
+    '<svg viewBox="0 0 64 64"><path d="M32 6l24 12v28L32 58 8 46V18z" fill="#f2f4f8" stroke="#3a3f48" stroke-width="3" stroke-linejoin="round"/><path d="M8 18l24 12 24-12M32 30v28" fill="none" stroke="#9aa3b0" stroke-width="2.5"/><circle cx="32" cy="18" r="3" fill="#3a3f48"/><circle cx="18" cy="34" r="3" fill="#3a3f48"/><circle cx="22" cy="44" r="3" fill="#3a3f48"/><circle cx="42" cy="36" r="3" fill="#3a3f48"/><circle cx="48" cy="46" r="3" fill="#3a3f48"/><circle cx="45" cy="41" r="3" fill="#3a3f48"/></svg>',
+  star: '<svg viewBox="0 0 64 64"><path d="M32 4l8 18 20 2-15 13 5 20-18-11-18 11 5-20L4 24l20-2z" fill="#ffc21a" stroke="#6a4a00" stroke-width="3" stroke-linejoin="round"/></svg>',
+  skip: '<svg viewBox="0 0 64 40"><path d="M8 4l26 16L8 36z" fill="#fff" stroke="#0b0f1a" stroke-width="4" stroke-linejoin="round"/><path d="M30 4l26 16-26 16z" fill="#fff" stroke="#0b0f1a" stroke-width="4" stroke-linejoin="round"/></svg>',
+  arrow: '<svg viewBox="0 0 64 64"><path d="M6 24h28V10l26 22-26 22V40H6z" fill="#fff" stroke="#9aa3b0" stroke-width="2" stroke-linejoin="round"/></svg>',
+  goldcart:
+    '<svg viewBox="0 0 64 64"><path d="M6 20h52l-6 26H12z" fill="#ffcc2a" stroke="#6a4600" stroke-width="3" stroke-linejoin="round"/><path d="M10 20l4-8h36l4 8" fill="#ffe27a" stroke="#6a4600" stroke-width="3" stroke-linejoin="round"/><path d="M14 30h36" stroke="#e0a010" stroke-width="3"/><circle cx="20" cy="50" r="6" fill="#8a6a2a" stroke="#3a2a00" stroke-width="3"/><circle cx="44" cy="50" r="6" fill="#8a6a2a" stroke="#3a2a00" stroke-width="3"/></svg>',
+  bills:
+    '<svg viewBox="0 0 64 64"><rect x="6" y="22" width="44" height="26" rx="3" fill="#1d8a34" stroke="#0b3a14" stroke-width="3" transform="rotate(-12 28 35)"/><rect x="12" y="20" width="44" height="26" rx="3" fill="#2fbf4a" stroke="#0b3a14" stroke-width="3"/><rect x="28" y="20" width="9" height="26" fill="#ffb31a" stroke="#6a4600" stroke-width="2"/><circle cx="20" cy="33" r="4" fill="#7dff8a"/></svg>',
+}
