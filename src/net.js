@@ -4,12 +4,12 @@
 // save it) or `serverError` (the save could not be read: never overwrite it). From then on
 // state.snapshot() goes up as `saveProgress` whenever it changed, at most every NET.saveEvery s,
 // and when the tab hides or closes.
-// Guests (not signed in to Bloxity), and everyone when no server is reachable, keep their progress
-// in this browser (localStorage, NET.localSave), loaded at start.
+// Nothing is ever saved in this browser: guests (not signed in to Bloxity) and everyone with no
+// reachable server play on in-memory progress that lasts the page. The server's document is the only save.
 // The server owns the quest schedule: `quests` { daily, weekly: { period, ids, endsAt }, serverTime }
 // (state.setSchedule); rerollQuests asks it to re-roll a tab (REFRESH QUESTS).
 // Every message's serverTime keeps clock.js on the server's clock (restocks, quest periods).
-// Never throws and never blocks play: without a server the game runs on the browser save.
+// Never throws and never blocks play: without a server the game runs on unsaved, in-memory progress.
 import { Client } from '@colyseus/sdk'
 import { DEV_MODE, NET, SERVER_URL } from './config.js'
 import { hydrate, onChange, setSaver, setSchedule, snapshot } from './state.js'
@@ -32,23 +32,15 @@ export const net = {
 }
 
 // --- Identity ---------------------------------------------------------------------
-// Signed-in players use their Bloxity id; everyone else a per-browser guest id (never saved on
-// the server). Dev mode (no SDK) plays as a per-browser dev id so a local server with Mongo keeps
-// its progress.
-function storedId(key, make) {
-  try {
-    let id = localStorage.getItem(key)
-    if (!id) localStorage.setItem(key, (id = make()))
-    return id
-  } catch {
-    return make()
-  }
-}
+// Signed-in players use their Bloxity id; everyone else a per-page guest id (never saved on
+// the server). Dev mode (no SDK) plays as a dev id (`?dev=<name>`, else `dev-player`) so a local
+// server with Mongo keeps its progress.
 const rand = () => Math.random().toString(36).slice(2, 8)
-const GUEST = storedId('build-a-cart.guest', () => `guest-${rand()}`)
-// Dev mode: `?dev=<name>` plays as dev-<name> (two tabs of one browser need two ids to meet in a room).
+const GUEST = `guest-${rand()}` // new on every page load: guests have no save to find again
+// Dev mode: `?dev=<name>` plays as dev-<name> (two tabs of one browser need two ids to meet in a room);
+// without it every tab is `dev-player`, a fixed id so nothing has to be remembered in the browser.
 const devParam = DEV_MODE ? new URLSearchParams(location.search).get('dev') : ''
-const DEV = DEV_MODE ? (devParam ? `dev-${devParam.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20)}` : storedId('build-a-cart.dev', () => `dev-${rand()}`)) : ''
+const DEV = DEV_MODE ? `dev-${(devParam || 'player').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20) || 'player'}` : ''
 
 function identity() {
   if (DEV) return { userId: DEV, username: `Dev ${DEV.slice(4)}` }
@@ -74,31 +66,11 @@ function who() {
   return { ...id, token: getToken(), ...(DEV && { devId: DEV }), pfp: getPfp(), ...lookFields() }
 }
 
-// --- Browser save (guests, or no server) -------------------------------------------
+// --- Who can be saved -----------------------------------------------------------------
 export const hasServer = () => !!(SERVER_URL || canResolveServer())
 // The server only saves players it could verify (a Bloxity token, or the dev id locally): when it
-// reports us as a guest the progress stays in this browser, whatever id we sent.
+// reports us as a guest nothing is saved at all (no browser copy), whatever id we sent.
 const serverSaves = () => net.room?.state?.players?.get?.(net.room?.sessionId)?.signedIn !== false
-const keepsLocal = () => !net.connected || isGuestId(sentId || identity().userId) || !serverSaves()
-function localLoad() {
-  try {
-    const raw = localStorage.getItem(NET.localSave)
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
-}
-let lastLocal = ''
-function localSave() {
-  try {
-    const snap = JSON.stringify(snapshot())
-    if (snap === lastLocal) return
-    lastLocal = snap
-    localStorage.setItem(NET.localSave, snap)
-  } catch {
-    // Private mode / storage full: this session's progress lasts the page.
-  }
-}
 
 // --- Saving -----------------------------------------------------------------------
 let lastSaved = ''
@@ -120,18 +92,16 @@ function serverSave() {
   lastSaved = snap
   send('saveProgress', JSON.parse(snap))
 }
-// Saves where the current identity's progress lives. A signed-in player who is not connected
-// (yet) also keeps a browser copy, so a reload before the server answers loses nothing.
-// Dev mode keeps a browser copy as well: a local backend usually has no MongoDB.
-// The browser tests (src/devtests) play with a throw-away save: while paused nothing is written
-// to this browser or the server, so the real progress is never overwritten.
+// Pushes the progress to the server (signed-in players only; serverSave skips guests, an unread
+// save and a dropped connection, whose progress is not kept anywhere).
+// The browser tests (src/devtests) play with a throw-away save: while paused nothing is sent to
+// the server, so the real progress is never overwritten.
 let savePaused = false
 export const setSavePaused = (on) => (savePaused = on)
 export function saveNow() {
   if (savePaused) return
   dirty = false
-  if (keepsLocal() || DEV) localSave()
-  if (!keepsLocal()) serverSave()
+  serverSave()
 }
 
 // --- Requests ---------------------------------------------------------------------------
@@ -214,8 +184,13 @@ function attach(room) {
     waiting.questsResult?.(r)
   })
   room.onMessage('adReward', (r) => waiting.adReward?.(r))
-  // Messages this client doesn't use yet (the backend's wheel/daily/leaderboard systems).
-  for (const type of ['spins', 'daily', 'leaderboard']) room.onMessage(type, (m) => setServerTime(m?.serverTime))
+  // The in-game top lists (backend leaderboard.ts): { boards: { stat: [{ name, value }] }, ranks }.
+  room.onMessage('leaderboard', (m) => {
+    setServerTime(m?.serverTime)
+    if (m?.boards && typeof m.boards === 'object') for (const fn of leaderboardListeners) fn(m.boards, m.ranks ?? {})
+  })
+  // Messages this client doesn't use yet (the backend's wheel/daily systems).
+  for (const type of ['spins', 'daily']) room.onMessage(type, (m) => setServerTime(m?.serverTime))
   room.onLeave(() => {
     if (net.room !== room) return
     net.room = null
@@ -226,6 +201,13 @@ function attach(room) {
     setTimeout(connect, NET.rejoin * 1000)
   })
   for (const fn of joinListeners) fn(room)
+}
+
+// main.js: fn(boards, ranks) whenever the server sends the top lists (after the load, then every minute).
+const leaderboardListeners = new Set()
+export function onLeaderboard(fn) {
+  leaderboardListeners.add(fn)
+  return () => leaderboardListeners.delete(fn)
 }
 
 // remote.js / presence.js: fn(room) after every (re)join, fn() when the room closed.
@@ -279,7 +261,7 @@ async function connect() {
   } catch (err) {
     // A full room (5 seats) of a party that was meant to stay together: say so.
     if (partyLaunch() && /full|locked/i.test(String(err?.message ?? err))) partyFailed('room-full')
-    console.info(`[net] could not reach the server (retrying in ${retryIn}s); playing on the browser save`, err?.message ?? err)
+    console.info(`[net] could not reach the server (retrying in ${retryIn}s); progress is not saved until it connects`, err?.message ?? err)
     setTimeout(connect, retryIn * 1000)
     retryIn = Math.min(retryIn * 2, NET.retryMax)
   } finally {
@@ -296,27 +278,24 @@ setInterval(() => {
 }, 1000)
 
 export function initNet() {
-  // The browser save first: a guest plays on it; a signed-in player until the server answers.
-  const local = localLoad()
-  if (local) hydrate(local)
+  // Nothing is read from this browser: the game starts fresh and the server's `progress` fills it in.
   setSaver(() => (dirty = true))
   // A Save Slot is the player's built cart: write it (and a freshly unlocked slot) to the server
   // at once instead of waiting for the debounce, so closing the tab right after never loses it.
   onChange((what) => (what === 'loadout' || what === 'slots') && saveNow())
   window.addEventListener('pagehide', saveNow)
   document.addEventListener('visibilitychange', () => document.hidden && saveNow())
-  if (!hasServer()) return console.info('[net] no server configured; progress is kept in this browser')
+  if (!hasServer()) return console.info('[net] no server configured; progress is not saved')
   subscribeAuth((s) => {
     if (!s.ready && !DEV) return
     if (!net.connected) return void connect()
     const id = identity()
     if (id.userId === sentId) return send('identify', { username: id.username, pfp: getPfp(), ...lookFields() })
-    // Save under the OLD identity before switching (auth has already moved on).
-    if (isGuestId(sentId)) localSave()
-    else serverSave()
+    // Save under the OLD identity before switching (auth has already moved on); a guest has nothing to save.
+    serverSave()
     net.hydrated = false
-    // Signed out: back to this browser's guest save (the account's progress stays on the server).
-    if (isGuestId(id.userId)) hydrate(localLoad())
+    // Signed out: a fresh guest session (the account's progress stays on the server).
+    if (isGuestId(id.userId)) hydrate(null)
     sentId = id.userId
     send('identify', who())
   })
