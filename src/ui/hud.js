@@ -159,7 +159,13 @@ export function createHud(actions) {
   const jL = tap(el('button', 'j-btn left stroke', '&#9664; SAFE<small>hold A</small>'), () => actions.lane(-1))
   const jR = tap(el('button', 'j-btn right stroke', 'GEM RUN &#9654;<small>hold D</small>'), () => actions.lane(1))
   junction.append(jL, jR)
-  ride.append(info, zoneCard, airPop, ...pops, alertBox, bendSign, junction, leanMeter, gauges, boostBtn, hint, pedals)
+  // Brake heat (pump the brakes on long descents), a side-attack arrow, and an action prompt
+  // with a progress bar (shake off a thief, dig out of the snow).
+  const heatBar = el('div', 'heat-bar', '<div class="fill"></div><span class="stroke">BRAKES</span>')
+  const attackL = el('div', 'attack-arrow left stroke', '&#9664;&#9664;')
+  const attackR = el('div', 'attack-arrow right stroke', '&#9654;&#9654;')
+  const promptBox = el('div', 'act-prompt stroke', '<b></b><div class="bar"><div class="fill"></div></div>')
+  ride.append(info, zoneCard, airPop, ...pops, alertBox, bendSign, junction, leanMeter, heatBar, attackL, attackR, promptBox, gauges, boostBtn, hint, pedals)
 
   // --- Crash -------------------------------------------------------------------------
   const crash = el('div', 'crash')
@@ -254,6 +260,10 @@ export function createHud(actions) {
       bendSign.classList.remove('on')
       alertBox.classList.remove('on')
       junction.classList.remove('on')
+      heatBar.classList.remove('on')
+      attackL.classList.remove('on')
+      attackR.classList.remove('on')
+      promptBox.classList.remove('on')
     },
     // Coins picked up this run.
     coins(n) {
@@ -294,6 +304,28 @@ export function createHud(actions) {
       if (!text) return
       if (alertBox.textContent !== text) alertBox.textContent = text
       alertBox.dataset.kind = kind
+    },
+    // Brake heat 0..1+ (faded: cooked, the bar blinks).
+    heat(k, faded) {
+      const on = k > 0.05
+      heatBar.classList.toggle('on', on)
+      if (!on) return
+      heatBar.firstChild.style.transform = `scaleX(${Math.min(1, k).toFixed(3)})`
+      heatBar.classList.toggle('hot', k > 0.7)
+      heatBar.classList.toggle('faded', !!faded)
+    },
+    // Something charging from a side (-1 left / 1 right), null to hide.
+    attack(side) {
+      attackL.classList.toggle('on', side === -1)
+      attackR.classList.toggle('on', side === 1)
+    },
+    // An action prompt with progress 0..1 ("SHAKE IT OFF! A / D"), null hides it.
+    prompt(text, k = 0) {
+      promptBox.classList.toggle('on', !!text)
+      if (!text) return
+      const b = promptBox.firstChild
+      if (b.textContent !== text) b.textContent = text
+      promptBox.querySelector('.fill').style.transform = `scaleX(${Math.max(0, Math.min(1, k)).toFixed(3)})`
     },
     // The junction chooser: sel -1 safe / 1 gem run / 0 none yet; null hides it.
     junction(sel) {

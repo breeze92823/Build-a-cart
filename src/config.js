@@ -301,7 +301,8 @@ export const BASES = { xs: [-76, -38, 0, 38, 76], home: 2, cartZ: -8 }
 // One track profile shared by every base. s = metres along the rails from the
 // cart's resting spot (z = BASES.cartZ - s). Heights are above the valley floor.
 export const TRACK = {
-  length: 3230, // buffer stop at the end of the line (Golden Station)
+  length: 7380, // buffer stop at the end of the line (the Diamond Terminus)
+  stationEnd: 3230, // Golden Station's platforms end here (the line runs on through the Golden Gate)
   backS: -21, // the rails start here, at the cave mouth behind the cart
   stationLength: 36, // blue studded bed under the rails on the base plateau
   // The bases sit on plateaus at y = 0; the valley floor is valleyDrop lower. The
@@ -355,12 +356,47 @@ export const TRACK = {
     [2950, 0],
     [3000, 7],
     [3060, 0],
+    // --- Act 2 (past the Golden Gate) ---
+    [3560, 0], // Dusty Gulch: a hump down main street
+    [3580, 3],
+    [3600, 0],
+    [3800, 0], // Ashfall Volcano: the bridge over the lava river
+    [3835, 14],
+    [3885, 14],
+    [3930, 0],
+    [4000, 0], // Lava Tubes: a chain lift up inside the tube to the crater rim
+    [4180, 40],
+    [4240, 40],
+    [4320, 6], // Crystal Caverns: plunge into the cave
+    [4470, 6],
+    [4520, 0],
+    [4590, 0], // Emerald Jungle: up onto the rope bridge over the ravine
+    [4620, 6],
+    [4680, 6],
+    [4714, 0],
+    [5280, 0], // Lighthouse Cove: up onto the cliff-top road (before its corners)
+    [5345, 14],
+    [5620, 14],
+    [5660, 0],
+    [5940, 0], // Titan Foothills: hairpins up the face (chain lift)
+    [6150, 80],
+    [6180, 82],
+    [6460, 100], // Avalanche Ridge climbs on to the foot of the peak
+    [6550, 150], // Titan Peak: the last lift to the summit
+    [6580, 150],
+    [6860, 70], // the spiral down round the peak
+    [6920, 62],
+    [7000, 52],
+    [7110, 42], // Glacier Gap: the lip (it takes ~85 m/s to clear: top gear)...
+    [7195, 32], // ...the far side
+    [7205, 32],
+    [7255, 0], // down into the Diamond Terminus
   ],
   river: { s0: 1860, s1: 1910 }, // water across the valley under the bridge
   gorge: { s0: 2020, s1: 2420, wallX: 104, lake: 2070 }, // walls either side, lake from `lake`
   falls: 2418, // the waterfall curtain across the gorge's end (the mine mouths behind it)
   mine: { s0: 2422, s1: 2736, roof: 14, boreHalf: 4.2 }, // tunnels through the mountain
-  station: 3150, // Golden Station platform starts here
+  station: 3150, // Golden Station platform starts here (halfway: the line runs on)
   // Bends: [s0, s1, dx] each shifts every track sideways by dx m (a smoothstep), so a
   // run of them makes an S. The cart leans into them (A / D, see LEAN).
   bends: [
@@ -370,10 +406,81 @@ export const TRACK = {
     [905, 985, 2],
   ],
   lift: { s0: 1000, s1: 1132, speed: 5 }, // chain lift: below `speed` the chain pulls the cart up
-  tunnels: [{ s0: 1172, s1: 1236, name: 'Mountain Tunnel' }], // dark, lamp-lit bores (the mine is separate)
+  // Every chain lift on the line (the first is `lift`).
+  lifts: [
+    { s0: 1000, s1: 1132, speed: 5 },
+    { s0: 4000, s1: 4180, speed: 6 }, // Lava Tubes
+    { s0: 5940, s1: 6150, speed: 8 }, // Titan Foothills hairpins
+    { s0: 6460, s1: 6550, speed: 6 }, // Titan Peak
+  ],
+  tunnels: [
+    { s0: 1172, s1: 1236, name: 'Mountain Tunnel' },
+    { s0: 3342, s1: 3382, name: 'Golden Gate' },
+    { s0: 3995, s1: 4236, name: 'Lava Tubes' },
+    { s0: 4250, s1: 4510, name: 'Crystal Caverns' },
+    { s0: 6335, s1: 6378, name: 'Snow Shed' },
+    { s0: 6405, s1: 6448, name: 'Snow Shed' },
+  ], // dark, lamp-lit bores (the mine is separate)
   drawbridge: { s0: 1868, s1: 1900, barrier: 1861 }, // the river bridge's lifting span (home track)
   junction: { choose: 2752, s0: 2762, s1: 2862, offset: 7.5, ramp: 22 }, // the Gem Run branch (home track)
-  goldLine: 3196, // stop the cart on it at Golden Station: PERFECT STOP
+  goldLine: 7350, // stop the cart on it at the Diamond Terminus: PERFECT STOP
+  terminus: 7262, // the Diamond Terminus platform: its brakes take over from here
+  // Past `join` the line is one 2D path (Act 2): segments from the end of Golden
+  // Station, heading north (-Z). ['S', m] straight; ['T', degrees (+ right), m] a
+  // turn whose curvature eases in and out (sin^2), so a 90 over 60 m peaks near r 19 m.
+  join: 3230,
+  path: [
+    ['S', 160], // out of Golden Station, through the Golden Gate (3342-3382)
+    ['S', 140], // Dusty Gulch main street
+    ['T', 35, 110],
+    ['S', 50],
+    ['T', -50, 130], // Ashfall Volcano
+    ['S', 70],
+    ['T', 25, 100],
+    ['S', 100], // Lava Tubes
+    ['T', -20, 80],
+    ['S', 70],
+    ['T', 40, 120], // Crystal Caverns
+    ['S', 60],
+    ['T', -40, 100],
+    ['T', -30, 100], // Emerald Jungle
+    ['S', 100],
+    ['T', 45, 100],
+    ['S', 40], // Lost Temple: 90-degree corridors
+    ['T', 90, 60],
+    ['S', 40],
+    ['T', -90, 60],
+    ['S', 30],
+    ['T', -90, 60],
+    ['T', 60, 160], // Misty Bayou
+    ['S', 90],
+    ['T', 90, 60], // Lighthouse Cove: corners along the cliff edge
+    ['S', 60],
+    ['T', -90, 60],
+    ['S', 40],
+    ['T', -60, 60],
+    ['T', 40, 120], // Frozen Tundra
+    ['S', 40],
+    ['T', -40, 100],
+    ['S', 40], // Titan Foothills: two hairpins up the face
+    ['T', 180, 70],
+    ['S', 60],
+    ['T', -180, 70],
+    ['S', 40],
+    ['T', 20, 80], // Avalanche Ridge
+    ['S', 120],
+    ['T', -30, 80],
+    ['S', 120], // Titan Peak: the last lift, the summit
+    ['T', 270, 280], // the spiral down round the peak
+    ['T', -90, 60], // 90-degree corners on the ice
+    ['S', 20],
+    ['T', 90, 60],
+    ['S', 170], // run-up, Glacier Gap (7110-7195), down to the terminus
+    ['S', 210], // the Diamond Terminus
+  ],
+  // Gaps the cart must jump (no rails between lip and end). The canyon is the first.
+  glacier: { lip: 7110, end: 7195, depth: 50 },
+  gate: { s: 3342, reb: 3 }, // the Golden Gate opens for players with this many rebirths
 }
 
 // Areas along the line (ride.js zone cards, ambient particles; zones.js scenery).
@@ -391,7 +498,20 @@ export const ZONES = [
   { id: 'gorge', name: 'Waterfall Gorge', sub: 'Up the Sky Trestle!', s: 2025, bonus: 2000, color: '#5ab8ff', dust: '#8a5a32', air: 'mist' },
   { id: 'mine', name: 'Glow Mine', sub: 'Through the falls!', s: 2422, bonus: 4000, color: '#d07bff', dust: '#6a5a8a', air: 'sparkle', tunnel: true },
   { id: 'desert', name: 'Golden Sands', sub: 'Sandstorm! Pick a lane...', s: 2736, bonus: 7000, color: '#ffd23a', dust: '#e8c07a', air: 'sand' },
-  { id: 'station', name: 'Golden Station', sub: 'END OF THE LINE!', s: 3150, bonus: 12000, color: '#ffe066', dust: '#e8c07a', air: 'sand', finish: true },
+  { id: 'station', name: 'Golden Station', sub: 'Halfway! On to the Golden Gate...', s: 3150, bonus: 12000, color: '#ffe066', dust: '#e8c07a', air: 'sand' },
+  { id: 'gulch', name: 'Dusty Gulch', sub: 'Stampede!', s: 3390, bonus: 16000, color: '#e8b27a', dust: '#c99a6a', air: 'sand' },
+  { id: 'volcano', name: 'Ashfall Volcano', sub: 'Mind the fire jets!', s: 3690, bonus: 20000, color: '#ff7a3a', dust: '#4a3a36', air: 'ash' },
+  { id: 'lava', name: 'Lava Tubes', sub: 'Up to the crater rim!', s: 3990, bonus: 25000, color: '#ff5a1a', dust: '#3a2a2a', air: 'embers', tunnel: true },
+  { id: 'caverns', name: 'Crystal Caverns', sub: 'Make the crystals sing!', s: 4240, bonus: 32000, color: '#7ae8ff', dust: '#5a6a8a', air: 'sparkle', tunnel: true },
+  { id: 'jungle', name: 'Emerald Jungle', sub: 'Hold on, the bridge sways!', s: 4520, bonus: 40000, color: '#3aff7a', dust: '#5a4a2a', air: 'leaves' },
+  { id: 'temple', name: 'Lost Temple', sub: 'Something is rolling...', s: 4820, bonus: 50000, color: '#d9c27a', dust: '#a89a7a', air: 'dust' },
+  { id: 'bayou', name: 'Misty Bayou', sub: 'Gators in the mud!', s: 5110, bonus: 62000, color: '#9adf6a', dust: '#4a5a32', air: 'fireflies' },
+  { id: 'cove', name: 'Lighthouse Cove', sub: 'Watch the waves!', s: 5360, bonus: 78000, color: '#5ad8ff', dust: '#d9cfb8', air: 'spray' },
+  { id: 'tundra', name: 'Frozen Tundra', sub: 'Icy rails!', s: 5640, bonus: 95000, color: '#cfeeff', dust: '#e8f4ff', air: 'snow' },
+  { id: 'foothills', name: 'Titan Foothills', sub: 'Hairpins! Brake and lean!', s: 5900, bonus: 120000, color: '#dfe8f4', dust: '#c9d3e0', air: 'snow' },
+  { id: 'ridge', name: 'Avalanche Ridge', sub: 'Shelter in the sheds!', s: 6180, bonus: 150000, color: '#eaf4ff', dust: '#e8f4ff', air: 'snow' },
+  { id: 'peak', name: 'Titan Peak', sub: 'The top of the world!', s: 6460, bonus: 190000, color: '#ffffff', dust: '#e8f4ff', air: 'snow' },
+  { id: 'terminus', name: 'Diamond Terminus', sub: 'THE END OF THE LINE!', s: 7205, bonus: 250000, color: '#b9f6ff', dust: '#e8f4ff', air: 'sparkle', finish: true },
 ]
 export const zoneAt = (s) => {
   let i = 0
@@ -402,7 +522,8 @@ export const zoneAt = (s) => {
 // --- Cart physics (cartPhysics.js) ----------------------------------------------
 export const CART = {
   gravity: 20, // m/s^2 along the rails and in the air
-  brake: 14, // m/s^2 with S held
+  brake: 14, // m/s^2 with S held...
+  brakeSpeed: 40, // ...x (1 + v / brakeSpeed): they bite harder at speed
   wagonMass: 0.04, // each extra cart: thrust divided by (1 + n * this)
   wagonFuel: 0.05, // ...and it carries fuel: tank x (1 + n * this)
   wagonGap: 3.1, // m between cart centres on the rails
@@ -467,6 +588,18 @@ export const LEAN = {
   autoMargin: 0.85, // headless sims (no lean input) brake to this share of the safe speed
 }
 
+// --- Surfaces (cartPhysics.js): stretches that change the cart's grip / rolling / burn ----------
+// grip x the wheels' grip in bends, roll x rolling resistance, burn x fuel use.
+export const SURFACES = [
+  { s0: 3690, s1: 3990, burn: 1.25, kind: 'heat' }, // Ashfall Volcano: the heat drinks fuel
+  { s0: 3990, s1: 4240, burn: 1.15, kind: 'heat' },
+  { s0: 5150, s1: 5340, roll: 4, kind: 'mud' }, // Misty Bayou
+  { s0: 5640, s1: 5900, grip: 0.6, kind: 'ice' }, // Frozen Tundra
+  { s0: 6580, s1: 7000, grip: 0.75, kind: 'ice' }, // Titan Peak descent
+]
+// Brakes heat up while held (S); past 1 they fade until they cool below `recover`.
+export const BRAKE = { heat: 0.2, cool: 0.32, fade: 0.3, recover: 0.45 }
+
 // --- Hazards and encounters along the line (encounters.js) -------------------------------
 // Each one blocks the home track at `at` for a while once the cart passes `trigger`.
 // Stop before `at` and wait for it to clear: a patience bonus. Arrive while it is
@@ -480,6 +613,41 @@ export const HAZARDS = [
 ]
 export const BEAR = { s0: 520, s1: 600, wait: 9, warn: 3, fuelLoss: 0.4 } // waited too long near the herd: a bear comes
 export const WIND = { s0: 2165, s1: 2315, every: [2.5, 4.5], warn: 0.7, gust: 1.6, push: 0.95 } // gusts on the Sky Trestle (push in LEAN units)
+// More gusty stretches: the Emerald Jungle rope bridge sways, the ridge and the peak blow.
+export const WINDS = [
+  WIND,
+  { s0: 4620, s1: 4680, every: [1.2, 2.2], warn: 0.5, gust: 1.1, push: 0.8, kind: 'sway' },
+  { s0: 6200, s1: 6330, every: [2.5, 4], warn: 0.7, gust: 1.6, push: 0.9 },
+  { s0: 6580, s1: 6860, every: [2.5, 4.5], warn: 0.7, gust: 1.5, push: 0.7 },
+]
+
+// --- Act 2 encounters (encounters2.js) -------------------------------------------------------
+// herd / blocker: like HAZARDS. ram: a side charge at `at` from `side`: lean INTO it
+// (towards the attacker) to brace. thief: grabs on at `at`; shake it off (A/D A/D) or
+// boost within `time` s, or it steals coins. chase: something chases from `s0` to `s1`
+// at `speed` m/s; caught = `hit`. avalanche: sweeps [a0, a1]; the snow sheds
+// (TRACK.tunnels 'Snow Shed') are safe; caught = buried (tap gas to dig out).
+export const HAZARDS2 = [
+  { id: 'stampede', kind: 'herd', animal: 'longhorn', name: 'STAMPEDE!', sub: 'Stop and let them thunder by', trigger: 3480, at: 3600, cross: 6, bump: 20, bonus: 70 },
+  { id: 'bull', kind: 'ram', animal: 'bull', side: -1, name: 'BULL!', at: 3500, bonus: 45 },
+  { id: 'jets', kind: 'jets', name: 'FIRE JETS!', sub: 'Wait for the gap!', trigger: 3700, at: 3790, cross: 3.2, early: 1.2, bump: 16, bonus: 50 },
+  { id: 'geysers', kind: 'geysers', name: 'GEYSERS!', sub: 'Time your run', trigger: 3880, at: 3955, cross: 2.6, early: 1, bump: 99, bonus: 45, soft: true },
+  { id: 'monkey', kind: 'thief', animal: 'monkey', name: 'MONKEY!', at: 4560, time: 2.6, bonus: 40 },
+  { id: 'jaguar', kind: 'herd', animal: 'jaguar', name: 'JAGUAR!', sub: 'It pounced on the rails!', trigger: 4730, at: 4790, cross: 2.4, bump: 26, bonus: 50, solo: true },
+  { id: 'boulder', kind: 'chase', name: 'ROLLING BOULDER!', sub: 'Keep moving!', s0: 4840, s1: 5100, speed: 14, accel: 2.2, bonus: 80 },
+  { id: 'gators', kind: 'herd', animal: 'alligator', name: 'GATORS!', sub: 'They cross slowly...', trigger: 5130, at: 5210, cross: 5.5, bump: 18, bonus: 55 },
+  { id: 'wave1', kind: 'wave', name: 'BIG WAVE!', sub: 'Wait for it to break', trigger: 5390, at: 5455, cross: 2.2, early: 1.4, bump: 22, bonus: 45 },
+  { id: 'gull', kind: 'thief', animal: 'seagull', name: 'SEAGULL!', at: 5515, time: 2.4, bonus: 40 },
+  { id: 'wave2', kind: 'wave', name: 'BIG WAVE!', sub: 'Wait for it to break', trigger: 5545, at: 5600, cross: 2.2, early: 1.2, bump: 22, bonus: 45 },
+  { id: 'penguins', kind: 'herd', animal: 'penguin', name: 'PENGUIN PARADE!', sub: 'Slow down...', trigger: 5680, at: 5750, cross: 5, bump: 99, bonus: 50, soft: true },
+  { id: 'polar', kind: 'herd', animal: 'polarbear', name: 'POLAR BEAR!', sub: 'Stop!', trigger: 5800, at: 5860, cross: 2.8, bump: 22, bonus: 55, solo: true },
+  { id: 'goat1', kind: 'ram', animal: 'goat', side: 1, name: 'GOAT!', at: 5975, bonus: 40 },
+  { id: 'goat2', kind: 'ram', animal: 'goat', side: -1, name: 'GOAT!', at: 6085, bonus: 40 },
+  { id: 'wolves', kind: 'chase', name: 'WOLF PACK!', sub: 'Outrun them!', s0: 6190, s1: 6330, speed: 13, accel: 1.6, bonus: 70, fuel: 0.3 },
+  { id: 'avalanche', kind: 'avalanche', name: 'AVALANCHE!', sub: 'Get into a snow shed!', trigger: 6300, a0: 6330, a1: 6460, delay: 4.5, hold: 4, dig: 8, bonus: 90 },
+  { id: 'eagle1', kind: 'thief', animal: 'eagle', name: 'EAGLE!', at: 6640, time: 2.4, bonus: 45 },
+  { id: 'eagle2', kind: 'thief', animal: 'eagle', name: 'EAGLE!', at: 6890, time: 2.2, bonus: 45 },
+]
 
 // --- Pickups, gates and skill bonuses (pickups.js) -------------------------------------------
 // Coin / gem rows along the home track; `m` = metres of run pay each is worth.
@@ -503,9 +671,18 @@ export const PICKUPS = {
   perfectStop: 150, // stopped within stopWindow m of the gold line
   stopWindow: 2.5,
   summit: 40, // over the top of the chain lift
+  summitPeak: 400, // over Titan Peak
+  glacier: 1500, // clearing the Glacier Gap
+  terminus: 2000, // arriving at the Diamond Terminus
+  cornerGood: 15, // Act 2 corners: GOOD, PERFECT (x streak, up to cornerStreakMax)
+  cornerPerfect: 30,
+  cornerStreakMax: 5,
+  thief: 0.25, // a thief gets away with this share of the run's coins
+  chime: 6, // each singing crystal
+  melody: 200, // all of them in a row
 }
 // Where REVIVE puts the cart back: the last checkpoint at least 15 m behind the crash.
-export const CHECKPOINTS = [130, 470, 690, 990, 1320, 1640, 1930, 2240, 2560, 2740, 3100]
+export const CHECKPOINTS = [130, 470, 690, 990, 1320, 1640, 1930, 2240, 2560, 2740, 3100, 3400, 3690, 3990, 4250, 4525, 4825, 5115, 5365, 5645, 5905, 6185, 6465, 6590, 7000]
 
 // --- Gear (state.js, the Shop restock window, the Index) ---------------------------
 // type: engine | fuel | wheels | booster. Stats:

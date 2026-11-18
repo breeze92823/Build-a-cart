@@ -12,6 +12,7 @@ import { createLighting } from './lighting.js'
 import { createWorld } from './world.js'
 import { createZones } from './zones.js'
 import { createRoute } from './route.js'
+import { createRoute2 } from './route2.js'
 import { buildTracks, fmt } from './track.js'
 import { buildCave, clock } from './cave.js'
 import { buildOutside } from './outside.js'
@@ -97,6 +98,7 @@ lighting = createLighting(scene, renderer, preset)
 const world = createWorld(scene)
 const zones = createZones(scene)
 const route = createRoute(scene)
+const route2 = createRoute2(scene)
 const tracks = buildTracks(scene, S.gearById)
 const cave = buildCave(scene)
 buildOutside(scene)
@@ -575,6 +577,7 @@ function frame(forceDt, draw = true) {
   remotes.update(dt, t, camPos, p, remoteVecs, camera)
   presence.update(dt)
   route.update(dt, t, camPos.z, ride.cartS, ride.riding, lighting.nightLevel())
+  route2.update(dt, t, camPos, ride.cartS, ride.riding, S.gateOpen())
   tracks.update(dt, t)
   cave.update(dt, t)
   updateWheel(dt)

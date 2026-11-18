@@ -9,7 +9,7 @@
 // multipliers) is banked at the end.
 import { Group, SpotLight, Vector3 } from 'three'
 import { BASES, CART, CART_FEEL, CHECKPOINTS, ECONOMY, LEAN, TRACK, ZONES, zoneAt } from './config.js'
-import { FLOOR_Y, VALLEY_Y, bendAt, fireBoost, newCart, safeSpeed, stepCart, topSpeed, trackHeight, trackSlope, trackX, trackXSlope } from './cartPhysics.js'
+import { CORNERS, FLOOR_Y, VALLEY_Y, bendAt, fireBoost, newCart, pathX, pathYaw, pathZ, safeSpeed, stepCart, surfaceAt, topSpeed, trackHeight, trackSlope } from './cartPhysics.js'
 import { createEncounters } from './encounters.js'
 import { buildCart, buildGhost, buildWagon, mountPart } from './cartModel.js'
 import { CartFeel } from './cartFeel.js'
@@ -217,12 +217,13 @@ export function createRide(scene, deps) {
 
   // Positions the train for this frame: lead at (s, y, pitch), carts along the breadcrumbs.
   const tmp = new Vector3()
-  const xAt = (s) => baseX + trackX(s) + enc.laneX(s)
-  const yawAt = (s) => -Math.atan(trackXSlope(s) + (enc.laneX(s + 0.5) - enc.laneX(s - 0.5)))
+  // The cart follows the line (bends, then the 2D path past Golden Station) and the Gem Run lane.
+  const xAt = (s) => baseX + pathX(s) + enc.laneX(s)
+  const yawAt = (s) => pathYaw(s) - Math.atan(enc.laneX(s + 0.5) - enc.laneX(s - 0.5))
   let roll = 0
   function place(s, y, pitch, spinV, dt = 0) {
     if (!cart) return
-    cart.position.set(xAt(s), y + RAIL_TOP + (cart.userData.hover ? 0.25 : 0), zAt(s))
+    cart.position.set(xAt(s), y + RAIL_TOP + (cart.userData.hover ? 0.25 : 0), pathZ(s))
     cart.rotation.y = yawAt(s)
     // Lean into the bend; past the green the cart rides up on two wheels (away from the turn).
     if (c && mode === 'riding' && !c.air) {
@@ -235,7 +236,7 @@ export function createRide(scene, deps) {
     // Each trailing cart hangs back by its couplers' slack (feel.back), so the train concertinas.
     wagons.forEach((w, i) => {
       const p = histAt((i + 1) * CART.wagonGap + (mode === 'idle' ? 0 : feel.back(i)))
-      w.position.set(xAt(p.s), p.y + RAIL_TOP, zAt(p.s))
+      w.position.set(xAt(p.s), p.y + RAIL_TOP, pathZ(p.s))
       w.rotation.y = yawAt(p.s)
       w.rotation.z = roll * 0.6
       w.userData.rail.rotation.x = p.pitch
@@ -434,7 +435,7 @@ export function createRide(scene, deps) {
   }
 
   // --- Crash ------------------------------------------------------------------------------
-  const CRASH_TEXT = { derail: 'DERAILED!', herd: 'THE MOOSE WON!', rocks: 'CRUSHED BY ROCKS!', splash: 'INTO THE RIVER!' }
+  const CRASH_TEXT = { derail: 'DERAILED!', herd: 'THE MOOSE WON!', rocks: 'CRUSHED BY ROCKS!', splash: 'INTO THE RIVER!', crevasse: 'INTO THE CREVASSE!', jets: 'TOO HOT!', wave: 'WASHED AWAY!' }
   function crash(kind = 'spikes') {
     mode = 'crashed'
     crashKind = kind
@@ -459,7 +460,7 @@ export function createRide(scene, deps) {
     for (const w of wagons) fx.explosion(w.getWorldPosition(new Vector3()), 0.6)
     // Off the rails sideways (bends, animals), down into the canyon, or into the river.
     const side = kind === 'derail' ? Math.sign(c.tip || 1) * -1 : 0
-    const floor = kind === 'spikes' ? FLOOR_Y + 0.3 : kind === 'splash' ? VALLEY_Y - 0.6 : Math.min(trackHeight(c.s), VALLEY_Y) + 0.3
+    const floor = kind === 'spikes' ? FLOOR_Y + 0.3 : kind === 'crevasse' ? (c.gap?.floorY ?? VALLEY_Y) + 0.3 : kind === 'splash' || kind === 'wave' ? VALLEY_Y - 0.6 : Math.min(trackHeight(c.s), VALLEY_Y) + 0.3
     spawnDebris(p, floor, side)
     cart.visible = false
     for (const w of wagons) w.visible = false
@@ -486,7 +487,7 @@ export function createRide(scene, deps) {
     // Back on the rails at the last checkpoint with a full tank and boosters.
     const maxS = c.maxS
     const jumped = c.jumped
-    const at = crashKind === 'spikes' ? CART.safeS : checkpointFor(c.s)
+    const at = crashKind === 'spikes' ? CART.safeS : checkpointFor(crashKind === 'crevasse' ? c.gap?.lip ?? c.s : c.s)
     c = newCart(st, at)
     enc.revive(at)
     roll = 0
@@ -565,9 +566,11 @@ export function createRide(scene, deps) {
         sfx.cartLand(1)
         shake = 0.9
         const p = cartPoint(new Vector3(0, 0.2, 0), new Vector3())
-        fx.ring(p, '#b98a5a', 30)
+        fx.ring(p, c.gap?.name === 'glacier' ? '#e8f4ff' : '#b98a5a', 30)
         fx.sparks(p, 40)
-        if (!landedFirstThisRun) {
+        if (c.gap?.name === 'glacier') {
+          enc.glacierCleared(p)
+        } else if (!landedFirstThisRun) {
           landedFirstThisRun = true
           const first = state.stats.jumps === 0
           const bonus = addCash(first ? ECONOMY.firstJumpBonus : ECONOMY.jumpBonus)
@@ -598,9 +601,18 @@ export function createRide(scene, deps) {
         }
       } else if (e === 'crash') crash(c.crashed === true ? 'spikes' : c.crashed)
       else if (e === 'derail') crash('derail')
+      else if (e === 'brakeFade') {
+        sfx.brakeFade()
+        hud.pop('BRAKES OVERHEATED! Pump them!', '#ff8a5a', 1.15)
+      }
       else if (e === 'lift') {
         sfx.liftEngage()
         hud.pop('CHAIN LIFT!', '#e9f6ff', 1.1)
+      } else if (e === 'bufferStop' && c.s < TRACK.length - 5) {
+        // The Golden Gate is shut for this player.
+        sfx.gateLocked()
+        shake = 0.6
+        hud.banner('GOLDEN GATE LOCKED', `Rebirth ${TRACK.gate.reb} times to open it`)
       } else if (e === 'bufferStop') {
         sfx.bufferClang()
         shake = 0.6
@@ -748,7 +760,7 @@ export function createRide(scene, deps) {
         fx.sparks(p, 1, 0, -Math.abs(v) * 0.97) // carried along, trailing off the wheels
       }
       // A little slow motion while flying over the canyon, and on the big airs.
-      const canyon = c.air && c.s > TRACK.lipS - 2 && c.s < TRACK.gapEnd + 4
+      const canyon = c.air && !c.hop && !!c.gap
       const bigAir = c.air && c.hop && c.airTime > 0.35 && c.y - trackHeight(c.s) > 4
       const target = canyon ? 0.55 : bigAir ? 0.72 : 1
       timeScale += (target - timeScale) * Math.min(1, dt * 6)
@@ -795,17 +807,28 @@ export function createRide(scene, deps) {
       hud.lean(c.tip, inBend || Math.abs(c.tip) > 0.2)
       let bendText = null
       let hot = false
-      for (let i = 0; i < TRACK.bends.length; i++) {
-        const [b0, b1] = TRACK.bends[i]
-        if (c.s > b1 || c.s < b0 - 160) continue
+      for (const cn of CORNERS) {
+        if (c.s > cn.s1 || c.s < cn.s0 - 160) continue
         let vs = Infinity
-        for (let x = b0 + 1; x < b1; x += 3) vs = Math.min(vs, safeSpeed(x, st.grip))
-        if (vs > 70 || v0 < vs * 0.6) break
-        bendText = `BEND! MAX ${Math.floor(vs)}`
+        for (let x = cn.s0 + 1; x < cn.s1; x += 3) vs = Math.min(vs, safeSpeed(x, st.grip))
+        if (vs > 70 || (v0 < vs * 0.6 && Math.abs(cn.deg) < 60)) break
+        const dir = cn.deg > 0 ? 'RIGHT' : 'LEFT'
+        bendText = Math.abs(cn.deg) >= 60 ? `${Math.abs(cn.deg)}\u00b0 ${dir} \u00b7 MAX ${Math.floor(vs)}` : `BEND! MAX ${Math.floor(vs)}`
         hot = v0 > vs * 1.05
         break
       }
       hud.bend(bendText, hot)
+      hud.heat(c.heat, c.faded)
+      // Surface and brake sounds (one grain each, rate-limited in sfx).
+      const sf = surfaceAt(c.s)
+      if (!c.air && sf?.kind === 'ice' && Math.abs(c.tip) > 0.3) sfx.ice(Math.min(1, Math.abs(c.tip)))
+      if (!c.air && sf?.kind === 'mud' && Math.abs(v0) > 2) sfx.mudSquelch(Math.min(1, Math.abs(v0) / 25))
+      if (c.heat > 0.45 && (inputState.move.z < -0.2 || pedalBrake) && Math.abs(v0) > 2) sfx.brakeHeat(Math.min(1, c.heat))
+      if (c.heat > 0.7 && Math.random() < c.heat * 0.5) {
+        back.set(Math.random() < 0.5 ? -0.75 : 0.75, 0.3, Math.random() < 0.5 ? 0.82 : -0.82)
+        cartPoint(back, p)
+        fx.exhaust(p, 0, 0.8, -Math.abs(v0) * 0.9, 0.15, 0.5)
+      }
     }
     enc.update(dt, ride_t, c, mode === 'riding' || mode === 'ending')
     runCashNow = runPayout(c.maxS, events.cash())
@@ -866,8 +889,11 @@ export function createRide(scene, deps) {
     if (inT > 0.05 && lastTunnel <= 0.05) sfx.tunnelEnter()
     lastTunnel = inT
     tunnel += (inT - tunnel) * Math.min(1, dt * 6)
-    // Sandstorm wind over the Golden Sands junction.
+    // One ambience bed at a time (never stacked), chosen by where the cart is.
+    const zid = ZONES[zoneIdx].id
+    const AMB = { gulch: 'westAmb', volcano: 'lavaAmb', lava: 'lavaAmb', caverns: 'caveAmb', jungle: 'jungleAmb', temple: 'jungleAmb', bayou: 'bayouAmb', cove: 'seaAmb', tundra: 'windHowl', foothills: 'windHowl', ridge: 'windHowl', peak: 'windHowl' }
     if (s > TRACK.junction.s0 - 40 && s < TRACK.junction.s1 + 30) sfx.sandstorm(0.7)
+    else if (AMB[zid]) sfx[AMB[zid]]?.(zid === 'peak' ? 0.9 : 0.6)
 
     // Ambient particles ahead of the cart: as it passes them they stream by
     // like wind. Denser at speed.
