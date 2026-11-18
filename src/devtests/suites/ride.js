@@ -154,6 +154,68 @@ export default {
       },
     },
     {
+      name: 'Cart feel: squat under gas, nose-dive and bunching under the brake, rail joints, free wheels chirp on landing',
+      async fn(t) {
+        const h = t.h
+        await h.reset()
+        h.state.wagons = Math.max(1, h.state.wagons)
+        await h.toCart()
+        await h.holdE(() => h.ride.riding, 3)
+        const d = () => h.ride.debug
+        t.eq(d().wagons.length, h.state.wagons + h.state.goldenCarts, 'the extra cart is hitched on')
+        h.keyDown('KeyW')
+        let squat = 0
+        let taut = 0
+        let joints = 0
+        for (let i = 0; i < 240; i++) {
+          await h.frames(1)
+          const f = d().feel
+          squat = Math.max(squat, f.lead.p)
+          taut = Math.max(taut, f.back(0))
+          joints += f.out.joints
+        }
+        h.keyUp('KeyW')
+        t.gt(squat, 0.003, `the nose lifts under power (${squat.toFixed(3)} rad)`)
+        t.gt(taut, 0.05, `the coupler pulls taut and the cart behind hangs back (${taut.toFixed(2)} m)`)
+        t.gt(joints, 0, `the axles knock over the rail joints (${joints})`)
+        h.keyDown('KeyS')
+        let dive = 0
+        let bunch = 0
+        let clank = 0
+        for (let i = 0; i < 45; i++) {
+          await h.frames(1)
+          const f = d().feel
+          dive = Math.min(dive, f.lead.p)
+          bunch = Math.min(bunch, f.back(0))
+          clank = Math.max(clank, f.out.clank)
+        }
+        h.keyUp('KeyS')
+        t.ok(dive < -0.01, `the nose dives under the brake (${dive.toFixed(3)} rad)`)
+        t.ok(bunch < -0.05, `the cart behind runs up on its coupler (${bunch.toFixed(2)} m)`)
+        t.gt(clank, 0, 'the couplers clank')
+        // Over the canyon on the gas: the wheels spin up in the air, then chirp as they meet the rails.
+        h.ride.warp(TRACK.lipS - 55, 62)
+        h.keyDown('KeyW')
+        let free = 0
+        let chirp = 0
+        let landed = 0
+        await h.until(() => {
+          const c = d()?.c
+          const f = d()?.feel
+          if (!c) return true
+          if (c.air) free = Math.max(free, Math.abs(f.wheel) - Math.abs(c.vx))
+          chirp = Math.max(chirp, f.out.chirp)
+          landed = Math.max(landed, f.out.landed)
+          return landed > 0
+        }, 10)
+        h.keyUp('KeyW')
+        t.gt(free, 5, `free wheels outspin the cart in the air (+${free.toFixed(1)} m/s)`)
+        t.gt(landed, 0, 'the body bounces on the landing')
+        t.gt(chirp, 0, 'the wheels chirp as they meet the rails')
+        t.eq(h.ride.mode, 'riding', 'and the cart rides on')
+      },
+    },
+    {
       name: 'Booster: Space fires a charge once, the HUD counts down, the stat is recorded',
       async fn(t) {
         const h = t.h

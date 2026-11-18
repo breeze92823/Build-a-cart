@@ -8,10 +8,11 @@
 // or RESTART); its cash (state.js runPayout: distance / Distance Per Currency x Currency x
 // multipliers) is banked at the end.
 import { Group, SpotLight, Vector3 } from 'three'
-import { BASES, CART, CHECKPOINTS, ECONOMY, LEAN, TRACK, ZONES, zoneAt } from './config.js'
+import { BASES, CART, CART_FEEL, CHECKPOINTS, ECONOMY, LEAN, TRACK, ZONES, zoneAt } from './config.js'
 import { FLOOR_Y, VALLEY_Y, bendAt, fireBoost, newCart, safeSpeed, stepCart, topSpeed, trackHeight, trackSlope, trackX, trackXSlope } from './cartPhysics.js'
 import { createEncounters } from './encounters.js'
-import { buildCart, buildGhost, buildWagon, mountPart, WHEEL_R } from './cartModel.js'
+import { buildCart, buildGhost, buildWagon, mountPart } from './cartModel.js'
+import { CartFeel } from './cartFeel.js'
 import { RAIL_TOP } from './track.js'
 import { zAt } from './world.js'
 import { addCash, currentStats, equippedGear, onChange, recordBoost, recordJump, recordRun, runPayout, spend, state } from './state.js'
@@ -59,6 +60,11 @@ export function createRide(scene, deps) {
   let cart = null
   let wagons = []
   let builtKey = ''
+  // The body on its springs, the wheels, the couplers' slack (cartFeel.js: looks + sounds only).
+  const feel = new CartFeel()
+  const wagonAt = [] // per trailing cart this frame: { s, air } for feel
+  let lastThrottle = 0
+  let boostIgnite = false
 
   // Debris from a crash: simple ballistic chunks.
   const debris = []
@@ -80,6 +86,8 @@ export function createRide(scene, deps) {
       root.add(w)
       wagons.push(w)
     }
+    feel.setWagons(wagons.length)
+    while (wagonAt.length < wagons.length) wagonAt.push({ s: 0, air: false })
     if (mode === 'idle') park()
   }
 
@@ -149,6 +157,7 @@ export function createRide(scene, deps) {
   let hCount = 0
   let pathLen = 0
   function histReset(s) {
+    feel.reset(s)
     hHead = 0
     hCount = 0
     pathLen = 0
@@ -222,16 +231,18 @@ export function createRide(scene, deps) {
       roll += (want - roll) * Math.min(1, dt * 12)
     } else roll += (0 - roll) * Math.min(1, dt * 6)
     cart.rotation.z = roll
-    cart.userData.tilt.rotation.x = pitch
-    for (const w of cart.userData.spin) w.rotation.x -= (spinV / WHEEL_R) * dt
+    cart.userData.rail.rotation.x = pitch
+    // Each trailing cart hangs back by its couplers' slack (feel.back), so the train concertinas.
     wagons.forEach((w, i) => {
-      const p = histAt((i + 1) * CART.wagonGap)
+      const p = histAt((i + 1) * CART.wagonGap + (mode === 'idle' ? 0 : feel.back(i)))
       w.position.set(xAt(p.s), p.y + RAIL_TOP, zAt(p.s))
       w.rotation.y = yawAt(p.s)
       w.rotation.z = roll * 0.6
-      w.userData.tilt.rotation.x = p.pitch
-      for (const wh of w.userData.spin) wh.rotation.x -= (spinV / WHEEL_R) * dt
+      w.userData.rail.rotation.x = p.pitch
       w.visible = mode !== 'crashed'
+      const at = wagonAt[i]
+      at.s = p.s
+      at.air = p.y - railY(p.s) > 0.08
     })
   }
 
@@ -240,6 +251,69 @@ export function createRide(scene, deps) {
     out.copy(local)
     cart.userData.tilt.localToWorld(out)
     return out
+  }
+
+  // --- The feel: springs, wheels, couplers, and the sounds + sparks they cue --------------------
+  const fv = new Vector3()
+  const feelIn = { s: 0, v: 0, air: false, throttle: 0, brake: 0, fuel: false, wood: false, wagons: wagonAt }
+  const COUPLER = new Vector3(0, 0.5, -1.75) // a trailing cart's front coupler (its tilt group)
+  const WHEELS = [new Vector3(-0.75, 0.05, -0.82), new Vector3(0.75, 0.05, -0.82), new Vector3(-0.75, 0.05, 0.82), new Vector3(0.75, 0.05, 0.82)]
+  function cartFeel(s, v, dt) {
+    const braking = c.air ? 0 : inputState.move.z < -0.2 || pedalBrake ? 1 : 0
+    const running = c.fuel > 0 && mode === 'riding'
+    const fin = feelIn
+    fin.s = s
+    fin.v = v
+    fin.air = !!c.air
+    fin.throttle = running ? c.throttle : 0
+    fin.brake = braking
+    fin.fuel = running
+    fin.wood = supportWood(s)
+    const out = feel.update(dt, fin)
+    feel.apply(cart, wagons, dt, running, c.throttle ?? 0)
+    const speedK = Math.min(1, Math.abs(v) / 30)
+    const carry = -Math.abs(v)
+    // Rail joints: one knock per axle, in step with the body's bump.
+    for (let i = 0; i < Math.min(2, out.joints); i++) sfx.railJoint(speedK, out.wood)
+    // A coupler snapping taut / bunching up: the clank runs down the train.
+    if (out.clank > 0 && out.clankAt >= 0 && wagons[out.clankAt]) {
+      sfx.coupler(out.clank, out.clankAt)
+      if (out.clank > 0.45) {
+        fv.copy(COUPLER)
+        wagons[out.clankAt].userData.tilt.localToWorld(fv)
+        fx.sparks(fv, 2 + Math.round(out.clank * 4), 0, carry * 0.9)
+      }
+    }
+    // Free-spinning wheels meeting the rails: a chirp, sparks and a puff of hot smoke off each wheel.
+    if (out.chirp > 0) {
+      sfx.wheelChirp(out.chirp)
+      for (const w of WHEELS) {
+        cartPoint(w, fv)
+        fx.sparks(fv, 2 + Math.round(out.chirp * 5), 0, carry * 0.85)
+        if (out.chirp > 0.35) fx.exhaust(fv, 0, 0.3, carry * 0.9, 0.15, 1.5)
+      }
+    }
+    // Lifting off the gas at speed: the exhaust pops and spits flame.
+    const thr = c.throttle ?? 0
+    if (running && !c.air && lastThrottle > 0.6 && thr < 0.1 && Math.abs(v) > CART_FEEL.backfireFrom && Math.random() < 0.75) {
+      sfx.backfire(Math.min(1, Math.abs(v) / 50))
+      const tips = cart.userData.exhausts.length ? cart.userData.exhausts : cart.userData.nozzle ? [cart.userData.nozzle] : []
+      for (const e of tips) {
+        cartPoint(e, fv)
+        for (let i = 0; i < 3; i++) fx.flame(fv, 0, 0.4, carry * 0.96 + 3, 0.8, '#ffe08a', '#ff4a10')
+      }
+    }
+    lastThrottle = thr
+    // A booster lighting up: a fat burst of flame and smoke, and the nose lifts.
+    if (boostIgnite) {
+      boostIgnite = false
+      feel.lead.pv += 0.55
+      for (const f of cart.userData.flames) {
+        cartPoint(f, fv)
+        for (let i = 0; i < 8; i++) fx.flame(fv, (Math.random() - 0.5) * 2, (Math.random() - 0.2) * 1.5, carry * 0.9 + 10 + Math.random() * 6, 1.5, '#fff1b0', '#ff5a1a')
+        for (let i = 0; i < 3; i++) fx.exhaust(fv, (Math.random() - 0.5) * 1.5, 0.6, carry * 0.85 + 3, 0.7, 1.4)
+      }
+    }
   }
 
   // --- Mount / dismount ------------------------------------------------------------------
@@ -253,6 +327,7 @@ export function createRide(scene, deps) {
     st = currentStats(events.speed(), events.storm() > 0.5)
     const s0 = restS()
     c = newCart(st, s0)
+    lastThrottle = 0
     enc.reset(c, events.cash())
     crashKind = null
     roll = 0
@@ -461,6 +536,7 @@ export function createRide(scene, deps) {
     if (boostQueued) {
       boostQueued = false
       if (fireBoost(c, st)) {
+        boostIgnite = true
         sfx.boost()
         boostedThisRun = true
         recordBoost()
@@ -566,6 +642,13 @@ export function createRide(scene, deps) {
       d.m.rotation.z += d.rz * dt
       const floor = d.floor
       if (d.m.position.y < floor && d.vy < 0) {
+        // First hits kick up dust and clatter; then it settles.
+        if (d.vy < -3) {
+          const k = Math.min(1, -d.vy / 14)
+          sfx.debris(k)
+          if (!d.hit) fx.dust(d.m.position, 3, ZONES[zoneIdx]?.dust ?? '#9a8a7a')
+          d.hit = true
+        }
         d.m.position.y = floor
         d.vy *= -0.3
         d.vx *= 0.6
@@ -578,6 +661,7 @@ export function createRide(scene, deps) {
 
     if (mode === 'idle') {
       place(restS(), 0, 0, 0)
+      feel.rest(cart, wagons)
       enc.update(dt, ride_t, null, false)
       return
     }
@@ -588,13 +672,16 @@ export function createRide(scene, deps) {
     distThisFrame = Math.abs(s - lastRenderS)
     lastRenderS = s
     const v = c.air ? c.vx : c.v
-    if (mode !== 'crashed') place(s, y, pitch, v, dt)
+    if (mode !== 'crashed') {
+      place(s, y, pitch, v, dt)
+      cartFeel(s, v, dt)
+    }
     if (mode === 'riding' || mode === 'ending') areas(s, v, dt)
 
     // The player rides in the seat.
     if (mode !== 'crashed') {
       seatPos(seat)
-      const rumble = !c.air && Math.abs(v) > 5 ? (Math.random() - 0.5) * 0.03 * Math.min(1, Math.abs(v) / 40) : 0
+      const rumble = !c.air && Math.abs(v) > 5 ? (Math.random() - 0.5) * 0.012 * Math.min(1, Math.abs(v) / 40) : 0
       player.pin(seat.x, seat.y + rumble, seat.z, Math.PI)
     }
 
@@ -638,12 +725,15 @@ export function createRide(scene, deps) {
         }
       }
       if (c.chain) sfx.chainClack(c.v)
-      // Brake sparks off the wheels.
+      // Brake sparks off the wheels: locked and skidding at speed, a shower off every wheel.
       const brakeIn = inputState.move.z < -0.2 || pedalBrake
       if (brakeIn && !c.air && Math.abs(v) > 6 && Math.random() < 0.8) {
-        back.set(Math.random() < 0.5 ? -0.75 : 0.75, 0.05, 0.82)
-        cartPoint(back, p)
-        fx.sparks(p, 2, 0, -Math.abs(v) * 0.8)
+        const locked = Math.abs(v) > CART_FEEL.lockFrom
+        for (let i = locked ? 0 : 1; i < 2; i++) {
+          back.set(Math.random() < 0.5 ? -0.75 : 0.75, 0.05, i ? 0.82 : -0.82)
+          cartPoint(back, p)
+          fx.sparks(p, locked ? 2 + Math.floor(speed01 * 3) : 2, 0, -Math.abs(v) * 0.8)
+        }
       }
       // Dust kicked up at speed.
       if (!c.air && tunnel < 0.5 && Math.abs(v) > 12 && Math.random() < speed01 * 0.5) {
@@ -897,7 +987,7 @@ export function createRide(scene, deps) {
     },
     // Dev (browser tests): the live cart physics state and this run's stats (null while parked).
     get debug() {
-      return c ? { c, st, startS, bestAtStart, zoneIdx } : null
+      return c ? { c, st, startS, bestAtStart, zoneIdx, feel, cart, wagons } : null
     },
     // Where to stand to get in: beside the lead cart.
     cartSpot: () => ({ x: baseX, z: zAt(restS()) }),
