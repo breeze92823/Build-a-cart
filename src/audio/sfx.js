@@ -1462,3 +1462,1029 @@ export const debris = safe(function debris(k = 0.5) {
   modal({ t, f: rnd(300, 1100), modes: Math.random() < 0.6 ? IRON : WOOD, gain: 0.03 + 0.08 * k, strike: 0.4, pan: rnd(-0.6, 0.6), verb: 0.15 })
   burst({ t, noise: 'brown', type: 'lowpass', f: 500, d: 0.06, gain: 0.08 * k })
 })
+
+// =============================================================================================
+// Build a Cart: wild line (animals, attacks, environments, area ambience)
+// =============================================================================================
+// Same conventions as the section above: every export is wrapped in `safe` (never throws),
+// returns quietly until audio runs, is gated by voice() and rate-limited, and does less on
+// phones. On top of that, a mix guard keeps stacked sounds from turning into a harsh mess:
+//  - gate(name, dur, prio, max, gap): per-name voice cap. At most `max` copies of one sound
+//    play at once (1 for the long, big ones: a repeat call while it plays is ignored), plus a
+//    minimum gap between starts, plus the shared voice() budget.
+//  - loud(fn): big one-shots are scheduled through their own gentle compressor (-10 dB, 3:1,
+//    soft knee, its automatic makeup gain trimmed back off) into the sfx bus, so their peaks
+//    sit with cartLand / crash. No waveshaper drive on any big sound here.
+//  - Ride grains (ice, mudSquelch, brakeHeat, ropeCreak, boulderRoll, avalancheRumble):
+//    rideGrain() schedules a new grain only once the previous grain of the same name has
+//    started fading (plus the ms rate limit), and scales the level by 1/sqrt(n) when n of these
+//    grain families are sounding together, so two different ones never sum past one loud one.
+//  - Ambience grains (*Amb + windHowl): ambGate() lets ONE family play at a time. Every call
+//    records (family, k); the strongest k heard in the last 0.4 s wins, the playing family keeps
+//    the bed unless beaten by more than 0.08 (no flapping). Each family plays through its own
+//    gain; a change of winner crossfades them (time constant 0.3 s). All families pass through
+//    one ambience gain into A.amb.
+//  - duckAmb(dur, depth): the big moments (avalanche, stampede, summitBig, terminus) dip the
+//    ambience beds (this section's families, and A.amb a little) for their length, then let
+//    them swell back, instead of summing on top.
+const CRYSTAL = [[1, 1, 2.6], [2.76, 0.32, 1.3], [5.4, 0.1, 0.6], [8.93, 0.04, 0.25]]
+const ICE = [[1, 1, 0.12], [2.43, 0.6, 0.08], [3.96, 0.4, 0.05], [6.1, 0.2, 0.03]]
+const HULL = [[1, 1, 0.5], [1.58, 0.6, 0.35], [2.3, 0.4, 0.2], [3.4, 0.15, 0.1]] // the hollow steel tub
+const PENT5 = [0, 2, 4, 7, 9]
+
+const live = () => !!A.master && !!A.ctx && A.ctx.state === 'running'
+
+// Per-name voice cap (see above). Returns false when the sound should not play.
+const playing = new Map()
+function gate(name, dur, prio, max = 1, gap = 0) {
+  if (!live()) return false
+  const ms = performance.now()
+  const list = (playing.get(name) ?? []).filter((end) => end > ms)
+  if (list.length >= max) return false
+  if (gap && !limit(name, gap)) return false
+  if (!voice(dur, prio)) return false
+  list.push(ms + dur * 1000)
+  playing.set(name, list)
+  return true
+}
+
+// Runs fn with A.sfx pointed at `bus`, so every helper (burst, modal, glock, applause...) lands there.
+function withBus(bus, fn) {
+  const saved = A.sfx
+  A.sfx = bus
+  try {
+    fn()
+  } finally {
+    A.sfx = saved
+  }
+}
+
+// A gentle compressor in front of the current sfx bus (which sfxAt may have swapped for a
+// placed one); its automatic makeup gain (Chrome: (1 / full-range gain)^0.6) is trimmed off.
+function limiter(dest) {
+  const ctx = A.ctx
+  if (!ctx.createDynamicsCompressor) return dest
+  const thr = -10
+  const ratio = 3
+  const c = ctx.createDynamicsCompressor()
+  c.threshold.value = thr
+  c.knee.value = 6
+  c.ratio.value = ratio
+  c.attack.value = 0.003
+  c.release.value = 0.2
+  const trim = ctx.createGain()
+  trim.gain.value = Math.pow(10, (0.6 * (thr - thr / ratio)) / 20)
+  c.connect(trim).connect(dest)
+  return c
+}
+const loud = (fn) => withBus(limiter(A.sfx), fn)
+
+// --- Ambience families + ducking ---
+let ambCtx = null
+let ambOut = null
+const famGains = new Map()
+function ambNodes() {
+  if (ambCtx !== A.ctx || !ambOut) {
+    ambCtx = A.ctx
+    famGains.clear()
+    ambOut = A.ctx.createGain()
+    ambOut.gain.value = 1
+    ambOut.connect(A.amb)
+  }
+  return ambOut
+}
+function famGain(name) {
+  const out = ambNodes()
+  let g = famGains.get(name)
+  if (!g) {
+    g = A.ctx.createGain()
+    g.gain.value = 0
+    g.connect(out)
+    famGains.set(name, g)
+  }
+  return g
+}
+function ambSwitch(from, to) {
+  const t = A.ctx.currentTime
+  for (const [name, level] of [[from, 0], [to, 1]]) {
+    if (!name) continue
+    const p = famGain(name).gain
+    p.cancelScheduledValues(t)
+    p.setTargetAtTime(level, t, 0.3)
+  }
+}
+const ambReq = new Map()
+let ambCur = null
+// Returns the family's bus when this call may play a grain, else null.
+function ambGate(name, k, ms, dur) {
+  if (!live()) return null
+  const t = performance.now()
+  ambReq.set(name, { k, at: t })
+  let best = null
+  let bk = -1
+  for (const [n, r] of ambReq) {
+    if (t - r.at < 400 && r.k > bk) {
+      best = n
+      bk = r.k
+    }
+  }
+  const cur = ambCur ? ambReq.get(ambCur) : null
+  if (cur && best !== ambCur && t - cur.at < 400 && cur.k + 0.08 >= bk) best = ambCur
+  if (best !== ambCur) {
+    ambSwitch(ambCur, best)
+    ambCur = best
+  }
+  if (name !== best || k < 0.02 || !limit(name, ms) || !voice(dur, 1)) return null
+  return famGain(name)
+}
+let duckEnd = 0
+let ambBase = null
+function duckAmb(dur, depth = 0.35) {
+  const t = A.ctx.currentTime
+  duckEnd = Math.max(duckEnd, t + dur)
+  ambBase ??= A.amb.gain.value
+  const targets = [[ambNodes().gain, depth, 1], [A.amb.gain, ambBase * (0.5 + depth * 0.5), ambBase]]
+  for (const [p, lo, hi] of targets) {
+    p.cancelScheduledValues(t)
+    p.setTargetAtTime(lo, t, 0.12)
+    p.setTargetAtTime(hi, duckEnd, 0.5)
+  }
+}
+
+// --- Ride grains ---
+const fadeAt = new Map()
+const grainSeen = new Map()
+// Level scale (0 = don't play) for a ride grain; `fade` s after it starts it begins to fade.
+function rideGrain(name, ms, dur, fade, k) {
+  if (k < 0.02 || !live()) return 0
+  if (now() < (fadeAt.get(name) ?? 0)) return 0
+  if (!limit(name, ms) || !voice(dur, 1)) return 0
+  fadeAt.set(name, now() + fade)
+  const t = performance.now()
+  grainSeen.set(name, t)
+  let n = 0
+  for (const at of grainSeen.values()) if (t - at < 300) n++
+  return 1 / Math.sqrt(Math.max(1, n))
+}
+
+// --- Shared pieces ---
+function howl(t, f, len, gain, pan) {
+  voc({ t, type: 'triangle', path: [[0, f], [len * 0.25, f * 1.6], [len * 0.75, f * 1.7], [len, f * 1.15]], a: len * 0.2, hold: len * 0.45, d: len * 0.35, gain, formants: [[700, 3, 1, 1100], [1400, 5, 0.35]], morph: len * 0.4, vib: 0.012, vibRate: rnd(5, 6.5), breath: 0.02, pan, verb: 0.45 })
+}
+function yip(t, gain, pan) {
+  const f = rnd(650, 820)
+  voc({ t, path: [[0, f], [0.03, f * 1.5], [0.12, f * 0.9]], a: 0.005, hold: 0.03, d: 0.08, gain, formants: [[1100, 4, 1], [2400, 6, 0.4]], growl: 0.15, growlRate: 40, breath: 0.05, pan, verb: 0.3 })
+}
+function gullCall(t, gain, pan, verb = 0.3) {
+  const f = rnd(850, 1000)
+  voc({ t, path: [[0, f], [0.05, f * 1.55], [0.22, f * 1.05]], a: 0.01, hold: 0.05, d: 0.16, gain, formants: [[1500, 4, 1], [2700, 6, 0.45]], growl: 0.18, growlRate: 55, breath: 0.03, pan, verb })
+}
+function chirps(t, gain, pan) {
+  let at = t
+  const n = 2 + Math.floor(Math.random() * 4)
+  const f0 = rnd(2200, 4000)
+  for (let i = 0; i < n; i++) {
+    const f = f0 * rnd(0.85, 1.2)
+    tone({ t: at, f, f2: f * rnd(0.7, 1.4), glide: 0.05, a: 0.005, d: rnd(0.04, 0.08), gain: gain * rnd(0.6, 1), pan, verb: 0.3 })
+    at += rnd(0.06, 0.11)
+  }
+}
+function crack(t, k) {
+  burst({ t, type: 'highpass', f: 2200, q: 0.6, a: 0.0005, d: 0.03, gain: 0.3 * k, verb: 0.35 })
+  burst({ t, f: 900, q: 0.8, a: 0.001, d: 0.06, gain: 0.15 * k })
+  tone({ t, f: 3200, f2: 500, glide: 0.12, a: 0.001, d: 0.16, gain: 0.05 * k, verb: 0.3 }) // the "pew" of a crack running through ice
+  modal({ t, f: vary(1700, 0.08), modes: ICE, gain: 0.08 * k, strike: 0.3, verb: 0.3 })
+  tone({ t, f: 110, f2: 50, d: 0.12, gain: 0.25 * k })
+  crinkle({ t: t + 0.01, n: few(10, 5), dur: 0.25, gain: 0.04 * k, f0: 2500, f1: 8000 })
+}
+function snare(t, g = 0.08) {
+  burst({ t, f: 1800, q: 0.8, a: 0.001, d: 0.06, gain: g })
+}
+function cymbal(t, g = 0.14, d = 1.2) {
+  burst({ t, type: 'highpass', f: 5500, q: 0.5, a: 0.002, d, gain: g, verb: 0.35 })
+  burst({ t, f: 3200, q: 0.8, a: 0.002, d: d * 0.35, gain: g * 0.6 })
+}
+
+// --- Animals ---------------------------------------------------------------------------------------
+// Bull: two hard blasts out of the nostrils, the lips fluttering, a short grunt under them.
+export const bullSnort = safe(function bullSnort() {
+  if (!gate('bullSnort', 0.8, 2, 1, 300)) return
+  const t = now()
+  const pan = rnd(-0.3, 0.3)
+  for (let i = 0; i < 2; i++) {
+    const at = t + i * rnd(0.16, 0.22)
+    const g = i ? 0.8 : 1
+    burst({ t: at, noise: 'pink', f: vary(700, 0.1), f2: 380, q: 1.1, a: 0.012, d: 0.22, gain: 0.3 * g, pan })
+    burst({ t: at, noise: 'brown', type: 'lowpass', f: 420, q: 0.6, a: 0.01, d: 0.2, gain: 0.25 * g, pan })
+    burst({ t: at, f: 1600, q: 3, a: 0.01, d: 0.12, gain: 0.05 * g, pan })
+  }
+  voc({ t: t + 0.02, path: [[0, vary(95, 0.06)], [0.25, 70]], a: 0.02, hold: 0.05, d: 0.2, gain: 0.35, formants: [[300, 3, 1], [800, 4, 0.4]], growl: 0.5, growlRate: 26, pan })
+})
+
+// Deep cattle low: closed "mmm" opening into a long "ooo", lower and slower than cow().
+export const moo2 = safe(function moo2() {
+  if (!gate('moo2', 1.8, 2, 1, 900)) return
+  const t = now()
+  const f = vary(98, 0.05)
+  const pan = rnd(-0.3, 0.3)
+  voc({ t, path: [[0, f * 0.9], [0.35, f * 1.12], [1.2, f * 1.05], [1.65, f * 0.78]], a: 0.15, hold: 0.85, d: 0.65, gain: 0.85, formants: [[230, 4, 1, 520], [680, 5, 0.45, 900], [2000, 7, 0.08]], morph: 0.55, vib: 0.012, vibRate: 4.5, growl: 0.1, growlRate: 24, breath: 0.03, pan, verb: 0.2 })
+  if (!COARSE_POINTER) tone({ t, f: f * 0.5, a: 0.2, hold: 0.8, d: 0.6, gain: 0.08, pan })
+})
+
+// Jaguar: the rasping "sawing" call, a run of throaty grunts, then a low rumbling growl.
+export const jaguarGrowl = safe(function jaguarGrowl() {
+  if (!gate('jaguarGrowl', 1.5, 3, 1, 700)) return
+  const t = now()
+  const pan = rnd(-0.3, 0.3)
+  let at = t
+  const n = few(5, 4)
+  for (let i = 0; i < n; i++) {
+    const f = vary(115 - i * 4, 0.05)
+    voc({ t: at, path: [[0, f], [0.05, f * 1.2], [0.16, f * 0.7]], a: 0.015, hold: 0.04, d: 0.12, gain: 0.55 * (1 - i * 0.08), formants: [[500, 3, 1, 380], [1200, 4, 0.45]], growl: 0.55, growlRate: 34, breath: 0.12, pan, verb: 0.15 })
+    at += rnd(0.17, 0.22) * (1 + i * 0.05)
+  }
+  voc({ t: at, path: [[0, 80], [0.2, 95], [0.55, 65]], a: 0.06, hold: 0.15, d: 0.35, gain: 0.45, formants: [[420, 3, 1], [1000, 4, 0.35]], growl: 0.6, growlRate: 30, breath: 0.08, pan, verb: 0.15 })
+})
+
+// Monkey: excited "ooh-ooh-ooh-aah-aah-AAH", climbing in pitch, ~1 s.
+export const monkeyChatter = safe(function monkeyChatter() {
+  if (!gate('monkeyChatter', 1.2, 2, 1, 500)) return
+  const t = now()
+  const pan = rnd(-0.5, 0.5)
+  const base = vary(460, 0.08)
+  const seq = few([0, 0, 0, 1, 1, 1], [0, 0, 1, 1])
+  let at = t
+  seq.forEach((aah, i) => {
+    const f = base * semi(i * 1.2) * (aah ? 1.35 : 1)
+    const len = aah ? 0.15 : 0.1
+    const formants = aah ? [[950, 4, 1, 1200], [1500, 5, 0.6], [2800, 7, 0.2]] : [[380, 4, 1, 450], [850, 5, 0.4], [2400, 8, 0.1]]
+    voc({ t: at, path: [[0, f * 0.85], [len * 0.4, f * 1.15], [len, f * 0.9]], a: 0.01, hold: len * 0.4, d: len * 0.6, gain: 0.4, formants, morph: len, vib: 0.03, vibRate: 18, growl: 0.12, growlRate: 45, breath: 0.04, pan: pan + rnd(-0.1, 0.1), verb: 0.2 })
+    at += len + rnd(0.04, 0.07)
+  })
+})
+
+// Alligator hiss: a long breathy hiss over a low throaty rumble.
+export const gatorHiss = safe(function gatorHiss() {
+  if (!gate('gatorHiss', 1.2, 2, 1, 600)) return
+  const t = now()
+  const pan = rnd(-0.3, 0.3)
+  burst({ t, f: vary(3800, 0.1), f2: 3000, q: 0.9, a: 0.12, hold: 0.45, d: 0.45, gain: 0.16, pan })
+  burst({ t, type: 'highpass', f: 5500, q: 0.5, a: 0.12, hold: 0.4, d: 0.4, gain: 0.05, pan })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 220, q: 0.7, a: 0.15, hold: 0.4, d: 0.4, gain: 0.25, pan })
+  voc({ t: t + 0.05, path: [[0, 58], [0.9, 50]], a: 0.15, hold: 0.4, d: 0.4, gain: 0.25, formants: [[250, 2, 1]], growl: 0.6, growlRate: 18, pan })
+})
+
+// Alligator jaws: a bony double clap, a hollow thud and a puff of air.
+export const gatorSnap = safe(function gatorSnap() {
+  if (!gate('gatorSnap', 0.5, 3, 2, 150)) return
+  const t = now()
+  const pan = rnd(-0.3, 0.3)
+  modal({ t, f: vary(420, 0.05), modes: WOOD, gain: 0.45, strike: 0.4, pan })
+  modal({ t: t + 0.012, f: vary(560, 0.05), modes: WOOD, gain: 0.3, strike: 0.3, pan })
+  tone({ t, f: 140, f2: 60, d: 0.12, gain: 0.35, pan })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 700, q: 0.6, a: 0.002, d: 0.1, gain: 0.3, pan })
+  burst({ t: t + 0.01, noise: 'pink', f: 1200, q: 0.8, a: 0.004, d: 0.08, gain: 0.1, pan })
+  buzz(30)
+})
+
+// Polar bear: a big, slow, open-throated roar, lower and longer than bear().
+export const polarRoar = safe(function polarRoar() {
+  if (!gate('polarRoar', 1.9, 3, 1, 1000)) return
+  loud(() => {
+    const t = now()
+    voc({ t, path: [[0, 70], [0.25, 135], [0.9, 120], [1.55, 60]], a: 0.1, hold: 0.6, d: 0.85, gain: 0.8, formants: [[450, 3, 1, 720], [1150, 4, 0.5, 1000], [2400, 5, 0.18]], morph: 0.4, growl: 0.4, growlRate: 28, breath: 0.12, verb: 0.3 })
+    tone({ t, f: 62, f2: 45, a: 0.08, hold: 0.4, d: 0.6, gain: 0.16 })
+    buzz(50)
+  })
+})
+
+// Penguin: a braying "aak-aak-aaaah".
+export const penguinSquawk = safe(function penguinSquawk() {
+  if (!gate('penguinSquawk', 1.1, 2, 1, 400)) return
+  const t = now()
+  const pan = rnd(-0.4, 0.4)
+  let at = t
+  for (let i = 0; i < 3; i++) {
+    const last = i === 2
+    const f = vary(520 + i * 60, 0.05)
+    const len = last ? 0.38 : 0.12
+    voc({ t: at, path: [[0, f * 0.8], [0.04, f * 1.2], [len, f * (last ? 0.8 : 0.95)]], a: 0.01, hold: len * 0.5, d: len * 0.5, gain: 0.42, formants: [[1000, 4, 1, 1150], [1800, 5, 0.6], [3000, 7, 0.2]], morph: len, growl: 0.3, growlRate: last ? 22 : 40, breath: 0.05, pan, verb: 0.15 })
+    at += len + rnd(0.05, 0.08)
+  }
+})
+
+// Goat: a quavering "meh-eh-eh-eh".
+export const goatBleat = safe(function goatBleat() {
+  if (!gate('goatBleat', 0.9, 2, 1, 400)) return
+  const f = vary(420, 0.08)
+  voc({ t: now(), path: [[0, f], [0.06, f * 1.22], [0.7, f * 0.9]], a: 0.02, hold: 0.35, d: 0.3, gain: 0.55, formants: [[600, 5, 1, 900], [1700, 6, 0.55], [2700, 8, 0.2]], morph: 0.12, vib: 0.06, vibRate: 9, growl: 0.4, growlRate: 9, breath: 0.04, pan: rnd(-0.3, 0.3), verb: 0.15 })
+})
+
+// Eagle: the classic raptor "kee-eeeee-arr", rasping, high and far.
+export const eagleScreech = safe(function eagleScreech() {
+  if (!gate('eagleScreech', 1.6, 2, 1, 1200)) return
+  const t = now()
+  const pan = rnd(-0.6, 0.6)
+  const f = vary(2500, 0.05)
+  voc({ t, path: [[0, f], [0.08, f * 1.15], [0.5, f * 0.92], [1.3, f * 0.55]], a: 0.04, hold: 0.55, d: 0.7, gain: 0.32, formants: [[2600, 4, 1, 1700], [4200, 6, 0.35, 3000]], morph: 1.2, vib: 0.01, vibRate: 7, growl: 0.35, growlRate: 60, pan, verb: 0.5 })
+  burst({ t, f: 3000, f2: 1700, q: 3, a: 0.04, hold: 0.5, d: 0.6, gain: 0.04, pan, verb: 0.4 })
+})
+
+// Seagull: "kyow kyow kyow".
+export const gullCry = safe(function gullCry() {
+  if (!gate('gullCry', 1, 2, 1, 500)) return
+  const t = now()
+  const pan = rnd(-0.6, 0.6)
+  const n = 2 + Math.floor(Math.random() * 3)
+  for (let i = 0; i < n; i++) gullCall(t + i * rnd(0.22, 0.28), 0.35 * (1 - i * 0.12), pan + i * 0.08)
+})
+
+// Crab: a few snaps of a claw.
+export const crabClick = safe(function crabClick() {
+  if (!gate('crabClick', 0.5, 1, 2, 150)) return
+  const t = now()
+  const pan = rnd(-0.4, 0.4)
+  let at = t
+  for (let i = 0; i < 3 + Math.floor(Math.random() * 3); i++) {
+    modal({ t: at, f: rnd(2200, 3200), modes: PLASTIC, gain: 0.14, strike: 0.25, pan })
+    burst({ t: at, f: 4500, q: 1.5, a: 0.0005, d: 0.006, gain: 0.08, pan })
+    at += rnd(0.04, 0.09)
+  }
+})
+
+// A wolf pack on the chase, ~2 s: several overlapping howls, yips, paws drumming. k = pack size.
+export const wolfPack = safe(function wolfPack(k = 1) {
+  const kk = clamp(k, 0.3, 2, 1)
+  if (!gate('wolfPack', 2.4, 3, 1, 800)) return
+  loud(() => {
+    const t = now()
+    const howls = Math.max(1, Math.min(5, Math.round(few(4, 2) * Math.min(1.25, kk))))
+    for (let i = 0; i < howls; i++) howl(t + i * rnd(0.12, 0.3), rnd(320, 430), rnd(1.1, 1.6), 0.28, rnd(-0.7, 0.7))
+    const yips = Math.round(few(8, 4) * kk)
+    for (let i = 0; i < yips; i++) yip(t + rnd(0.1, 1.9), rnd(0.15, 0.25), rnd(-0.8, 0.8))
+    for (let i = 0; i < few(16, 6); i++) burst({ t: t + Math.random() * 2, noise: 'brown', type: 'lowpass', f: rnd(400, 700), q: 0.8, a: 0.002, d: 0.035, gain: rnd(0.05, 0.1) * kk, pan: rnd(-0.6, 0.6) })
+  })
+})
+
+// A herd stampeding past, ~2.5 s of hoof thunder swelling and fading; k = intensity (0.2..2).
+export const stampede = safe(function stampede(k = 1) {
+  const kk = clamp(k, 0.2, 2, 1)
+  if (!gate('stampede', 2.7, 4, 1, 1200)) return
+  duckAmb(2.6, 0.35)
+  loud(() => {
+    const t = now()
+    const D = 2.5
+    const lvl = Math.min(1.2, 0.5 + kk * 0.5)
+    burst({ t, noise: 'brown', type: 'lowpass', f: 110, f2: 220, sweep: 1.1, q: 0.7, a: 0.7, hold: 0.9, d: 0.9, gain: 0.45 * lvl, verb: 0.3 })
+    if (!COARSE_POINTER) tone({ t, f: 38, f2: 46, glide: 1.2, a: 0.7, hold: 0.9, d: 0.9, gain: 0.16 * lvl })
+    const n = Math.round(few(56, 24) * Math.min(1.5, lvl))
+    for (let i = 0; i < n; i++) {
+      const u = (Math.random() + Math.random()) / 2 // most hooves in the middle of the pass
+      const g = 1 - Math.abs(u - 0.5) * 1.4
+      const at = t + u * D
+      const pan = rnd(-0.8, 0.8)
+      burst({ t: at, noise: 'brown', type: 'lowpass', f: rnd(250, 600), q: 0.8, a: 0.002, d: rnd(0.04, 0.08), gain: rnd(0.08, 0.17) * g * lvl, pan })
+      if (i % 3 === 0) tone({ t: at, f: rnd(60, 110), f2: 40, d: 0.06, gain: 0.1 * g * lvl, pan })
+    }
+    crinkle({ t: t + 0.4, n: few(24, 10), dur: 1.8, gain: 0.025 * lvl, f0: 1200, f1: 5000, width: 0.9 })
+    for (let i = 0; i < few(3, 1); i++) {
+      const f = rnd(110, 140)
+      voc({ t: t + rnd(0.4, 1.5), path: [[0, f], [0.25, f * 1.1], [0.7, f * 0.8]], a: 0.06, hold: 0.25, d: 0.4, gain: 0.22, formants: [[300, 4, 1, 550], [800, 5, 0.4]], morph: 0.3, growl: 0.15, pan: rnd(-0.7, 0.7), verb: 0.3 })
+    }
+    buzz([0, 200, 60, 300])
+  })
+})
+
+// --- Attacks / contact -----------------------------------------------------------------------------
+// Rammed from the side: a hollow boom of the steel cart body, the thud, a puff of dust.
+export const ramHit = safe(function ramHit(k = 1) {
+  const kk = clamp(k, 0.2, 1.5, 1)
+  if (!gate('ramHit', 1.3, 4, 2, 120)) return
+  loud(() => {
+    const t = now()
+    tone({ t, f: 78, f2: 34, d: 0.35, gain: 0.5 * kk })
+    burst({ t, noise: 'brown', type: 'lowpass', f: 800, f2: 250, q: 0.6, a: 0.002, d: 0.3, gain: 0.5 * kk, verb: 0.2 })
+    modal({ t, f: vary(150, 0.05), modes: IRON, gain: 0.24 * kk, strike: 0.5, beat: twin(7), decay: 1.3, verb: 0.3 })
+    modal({ t: t + 0.006, f: vary(95, 0.05), modes: HULL, gain: 0.22 * kk, verb: 0.2 })
+    burst({ t: t + 0.02, noise: 'pink', type: 'lowpass', f: 2000, f2: 600, q: 0.5, a: 0.03, d: 0.6, gain: 0.1 * kk, pan: rnd(-0.4, 0.4) })
+    crinkle({ t: t + 0.03, n: few(14, 6), dur: 0.5, gain: 0.03 * kk, f0: 1200, f1: 5000, width: 0.8 })
+    buzz(80)
+  })
+})
+
+// Something snatched cash: a quick swipe, then coins jingling away to one side.
+export const steal = safe(function steal() {
+  if (!gate('steal', 1, 3, 1, 200)) return
+  claim()
+  const t = now()
+  const side = Math.random() < 0.5 ? -1 : 1
+  burst({ t, noise: 'pink', f: 900, f2: 4200, q: 0.9, a: 0.02, d: 0.12, gain: 0.25, pan: -side * 0.2 })
+  const n = few(6, 4)
+  for (let i = 0; i < n; i++) modal({ t: t + 0.08 + i * 0.07, f: rnd(2600, 3800) * semi(-i * 0.5), modes: COIN, gain: 0.08 * (1 - i / 8), beat: twin(6), strike: 0.2, decay: 0.5, pan: side * (0.2 + i * 0.12), verb: 0.08 + i * 0.05 })
+  modal({ t: t + 0.06, f: C6 * semi(7), modes: GLOCK, gain: 0.06, strike: 0.1, pan: side * 0.3 })
+  modal({ t: t + 0.16, f: C6 * semi(4), modes: GLOCK, gain: 0.05, strike: 0.1, pan: side * 0.5 })
+})
+
+// Shaking an animal off: a whoosh and a flustered flurry of flapping.
+export const shakeOff = safe(function shakeOff() {
+  if (!gate('shakeOff', 0.9, 2, 1, 200)) return
+  const t = now()
+  burst({ t, noise: 'pink', f: 2600, f2: 350, q: 1, a: 0.04, d: 0.32, gain: 0.3 })
+  tone({ t, f: 120, f2: 60, d: 0.1, gain: 0.15 })
+  const n = few(9, 6)
+  const rate = rnd(13, 16)
+  for (let j = 0; j < n; j++) burst({ t: t + 0.05 + (j / rate) * rnd(0.9, 1.1), noise: 'pink', f: rnd(800, 1300), q: 0.9, a: 0.004, d: 0.035, gain: 0.12 * (1 - (j / n) * 0.5), pan: Math.sin(j * 1.7) * 0.5 })
+  crinkle({ t: t + 0.05, n: few(10, 5), dur: 0.5, gain: 0.03, f0: 2500, f1: 7000 })
+  voc({ t: t + 0.08, path: [[0, 700], [0.04, 850], [0.14, 520]], a: 0.005, hold: 0.03, d: 0.1, gain: 0.12, formants: [[1100, 4, 1], [2200, 6, 0.4]], growl: 0.3, growlRate: 45 })
+})
+
+// Braced in time: a shield-like clang and a little cheer jingle.
+export const blocked = safe(function blocked() {
+  if (!gate('blocked', 1.6, 4, 1, 200)) return
+  claim()
+  loud(() => {
+    const t = now()
+    tone({ t, f: 110, f2: 55, d: 0.15, gain: 0.35 })
+    burst({ t, noise: 'brown', type: 'lowpass', f: 900, q: 0.6, a: 0.002, d: 0.12, gain: 0.3 })
+    modal({ t, f: vary(430, 0.02), modes: IRON, gain: 0.22, strike: 0.6, beat: twin(8), decay: 1.1, verb: 0.35 })
+    modal({ t: t + 0.003, f: vary(690, 0.02), modes: COIN, gain: 0.08, beat: twin(5), decay: 1, verb: 0.3 })
+    burst({ t, type: 'highpass', f: 5000, q: 0.5, a: 0.002, d: 0.15, gain: 0.06 })
+    glock(t + 0.2, [0, 4, 7, 12, 16], 0.055, 0.11, 0.3)
+    modal({ t: t + 0.45, f: C6, modes: BELL, gain: 0.07, beat: twin(4), strike: 0.2, verb: 0.3 })
+    buzz([30, 40, 30])
+  })
+})
+
+// Buried by snow: a big muffled whumpf, the snow crunching and settling.
+export const buried = safe(function buried() {
+  if (!gate('buried', 1.6, 4, 1, 400)) return
+  loud(() => {
+    const t = now()
+    burst({ t, noise: 'brown', type: 'lowpass', f: 380, f2: 90, q: 0.6, a: 0.008, d: 0.55, gain: 0.55 })
+    tone({ t, f: 72, f2: 32, d: 0.45, gain: 0.45 })
+    burst({ t, noise: 'pink', type: 'lowpass', f: 1400, f2: 300, q: 0.5, a: 0.01, d: 0.35, gain: 0.18 })
+    crinkle({ t, n: few(18, 8), dur: 0.4, gain: 0.04, f0: 900, f1: 3000 })
+    burst({ t: t + 0.15, noise: 'pink', type: 'lowpass', f: 500, q: 0.5, a: 0.1, hold: 0.2, d: 0.7, gain: 0.06 })
+    buzz(70)
+  })
+})
+
+// One shovel scrape digging out; k 0..1 progress raises the pitch.
+export const digTick = safe(function digTick(k = 0) {
+  const kk = clamp(k, 0, 1, 0)
+  if (!gate('digTick', 0.25, 1, 3, 60)) return
+  const t = now()
+  const p = 1 + kk * 0.9
+  burst({ t, noise: 'pink', f: vary(900 * p, 0.1), f2: 700 * p, q: 2.2, a: 0.012, d: 0.11, gain: 0.2, pan: rnd(-0.2, 0.2) })
+  crinkle({ t, n: few(6, 3), dur: 0.1, gain: 0.05, f0: 1000 * p, f1: 3500 * p })
+  modal({ t: t + 0.01, f: vary(1500 * p, 0.04), modes: IRON, gain: 0.035, decay: 0.15, strike: 0.2 })
+  tone({ t, f: 140 * p, f2: 80, d: 0.05, gain: 0.12 })
+})
+
+// Dug out: snow bursting off, a pop and a happy jingle.
+export const dugOut = safe(function dugOut() {
+  if (!gate('dugOut', 1.5, 4, 1, 400)) return
+  claim()
+  const t = now()
+  burst({ t, noise: 'pink', f: 300, f2: 3000, q: 0.7, a: 0.01, d: 0.45, gain: 0.3 })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 600, q: 0.6, a: 0.003, d: 0.2, gain: 0.3 })
+  bubble({ t, f: 300, d: 0.1, gain: 0.22, rise: 1.4 })
+  crinkle({ t: t + 0.05, n: few(26, 12), dur: 0.7, gain: 0.04, f0: 1500, f1: 7000, width: 0.9 })
+  glock(t + 0.15, [0, 4, 7, 12, 16, 19], 0.06, 0.12, 0.3)
+  buzz([30, 40, 30])
+})
+
+// Touched by fire: a whoomp of flame, crackle and a short sizzle.
+export const burn = safe(function burn() {
+  if (!gate('burn', 1, 3, 1, 250)) return
+  loud(() => {
+    const t = now()
+    burst({ t, noise: 'pink', f: 350, f2: 1600, q: 0.6, a: 0.03, d: 0.35, gain: 0.3 })
+    burst({ t, noise: 'brown', type: 'lowpass', f: 300, q: 0.6, a: 0.01, d: 0.25, gain: 0.3 })
+    tone({ t, f: 85, f2: 42, d: 0.18, gain: 0.25 })
+    crinkle({ t: t + 0.03, n: few(16, 8), dur: 0.5, gain: 0.05, f0: 1500, f1: 5000 })
+    burst({ t: t + 0.05, type: 'highpass', f: 4500, q: 0.5, a: 0.01, hold: 0.1, d: 0.4, gain: 0.09 })
+    burst({ t: t + 0.05, f: 7000, q: 2, a: 0.01, hold: 0.1, d: 0.3, gain: 0.04 })
+  })
+})
+
+// A wave crashing over the cart: a big water slap, the wash and a long hiss of foam.
+export const splashBig = safe(function splashBig() {
+  if (!gate('splashBig', 2, 4, 1, 300)) return
+  loud(() => {
+    const t = now()
+    tone({ t, f: 62, f2: 30, d: 0.35, gain: 0.45 })
+    burst({ t, noise: 'brown', type: 'lowpass', f: 700, f2: 150, q: 0.6, a: 0.006, d: 0.55, gain: 0.55, verb: 0.25 })
+    burst({ t, noise: 'pink', f: 1200, f2: 500, q: 0.5, a: 0.015, hold: 0.15, d: 0.9, gain: 0.22, verb: 0.3 })
+    burst({ t, type: 'highpass', f: 2500, q: 0.5, a: 0.05, hold: 0.25, d: 1.1, gain: 0.13, verb: 0.25 })
+    bubbles({ t, n: few(40, 18), dur: 0.6, f0: 250, f1: 2000, gain: 0.08 })
+    bubbles({ t: t + 0.4, n: few(22, 10), dur: 0.9, f0: 1100, f1: 4200, gain: 0.035, d: [0.008, 0.02] })
+    buzz(90)
+  })
+})
+
+// Grain: skidding on ice, a crackle with a glassy hiss; k 0..1. ~120 ms.
+export const ice = safe(function ice(k) {
+  k = clamp(k, 0, 1, 0)
+  const g = rideGrain('ice', 120, 0.3, 0.08, k)
+  if (!g) return
+  const t = now()
+  crinkle({ t, n: few(7, 4), dur: 0.14, gain: (0.02 + 0.06 * k) * g, f0: 2500, f1: 8500, width: 0.4 })
+  burst({ t, f: rnd(4000, 6000), q: 1.5, a: 0.03, hold: 0.05, d: 0.12, gain: (0.015 + 0.05 * k) * g, pan: rnd(-0.2, 0.2) })
+  if (!COARSE_POINTER && Math.random() < 0.3 * k) modal({ t: t + rnd(0, 0.08), f: rnd(2500, 4500), modes: ICE, gain: 0.03 * k * g, decay: 0.5 })
+})
+
+// Grain: wheels churning mud, a wet squelch and thick bubbles; k 0..1. ~150 ms.
+export const mudSquelch = safe(function mudSquelch(k) {
+  k = clamp(k, 0, 1, 0)
+  const g = rideGrain('mudSquelch', 150, 0.35, 0.09, k)
+  if (!g) return
+  const t = now()
+  burst({ t, noise: 'pink', f: rnd(300, 500), f2: rnd(700, 1100), q: 3, a: 0.03, hold: 0.06, d: 0.15, gain: (0.04 + 0.12 * k) * g, pan: rnd(-0.2, 0.2) })
+  for (let i = 0; i < few(3, 2); i++) bubble({ t: t + rnd(0, 0.15), f: rnd(110, 260), d: rnd(0.05, 0.1), gain: (0.05 + 0.1 * k) * g, rise: rnd(0.6, 1.2), pan: rnd(-0.3, 0.3) })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 300, a: 0.02, d: 0.1, gain: 0.06 * k * g })
+})
+
+// Grain: hot brakes, a hiss and sizzle; past k 0.55 a squeal rises in. ~140 ms.
+let bhF = 2700
+export const brakeHeat = safe(function brakeHeat(k) {
+  k = clamp(k, 0, 1, 0)
+  const g = rideGrain('brakeHeat', 140, 0.35, 0.1, k)
+  if (!g) return
+  const t = now()
+  burst({ t, type: 'highpass', f: rnd(3000, 4500), q: 0.6, a: 0.05, hold: 0.05, d: 0.2, gain: (0.015 + 0.06 * k) * g, pan: rnd(-0.15, 0.15) })
+  if (!COARSE_POINTER) crinkle({ t, n: 3, dur: 0.15, gain: 0.02 * k * g, f0: 4000, f1: 9000, width: 0.3 })
+  if (k > 0.55) {
+    const s = (k - 0.55) / 0.45
+    const f0 = bhF
+    bhF = clamp(bhF + rnd(-80, 80) + (2500 + k * 900 - bhF) * 0.15, 2200, 3800, 2700)
+    tone({ t, f: f0, f2: bhF, glide: 0.2, a: 0.06, hold: 0.04, d: 0.12, gain: 0.045 * s * g })
+  }
+})
+
+// Brakes overheated (one-shot warning): a metallic groan and a long hiss.
+export const brakeFade = safe(function brakeFade() {
+  if (!gate('brakeFade', 1.6, 3, 1, 1200)) return
+  const t = now()
+  creak({ t, rate: 22, rate2: 14, f: 650, q: 12, body: 2.76, a: 0.15, d: 0.9, gain: 0.09, verb: 0.2 })
+  tone({ t, type: 'sawtooth', f: 120, f2: 82, glide: 1, a: 0.12, hold: 0.4, d: 0.6, gain: 0.06, lp: 700 })
+  modal({ t, f: vary(380, 0.03), modes: IRON, gain: 0.1, strike: 0.3, beat: twin(6), decay: 1.2 })
+  burst({ t: t + 0.05, type: 'highpass', f: 3500, q: 0.5, a: 0.12, hold: 0.5, d: 0.6, gain: 0.1 })
+  burst({ t: t + 0.05, f: 6500, q: 2, a: 0.1, hold: 0.4, d: 0.5, gain: 0.04 })
+  buzz([40, 60, 40])
+})
+
+// --- Environment one-shots -------------------------------------------------------------------------
+// Avalanche, ~3 s: deep distant thunder building into a roaring rush of snow.
+export const avalanche = safe(function avalanche() {
+  if (!gate('avalanche', 3.3, 5, 1, 1500)) return
+  duckAmb(3.2, 0.3)
+  loud(() => {
+    const t = now()
+    burst({ t, noise: 'brown', type: 'lowpass', f: 90, f2: 260, sweep: 1.8, q: 0.7, a: 1.3, hold: 0.9, d: 1, gain: 0.6, verb: 0.4 })
+    if (!COARSE_POINTER) tone({ t, f: 32, f2: 42, glide: 1.8, a: 1.2, hold: 0.9, d: 1, gain: 0.2 })
+    for (let i = 0; i < few(4, 2); i++) burst({ t: t + 0.1 + i * rnd(0.25, 0.4), noise: 'brown', type: 'lowpass', f: rnd(120, 200), q: 0.6, a: 0.05, d: rnd(0.5, 0.8), gain: rnd(0.15, 0.25), pan: rnd(-0.5, 0.5), verb: 0.5 })
+    burst({ t: t + 0.5, noise: 'pink', f: 350, f2: 1500, sweep: 1.4, q: 0.5, a: 1, hold: 0.6, d: 1, gain: 0.26, verb: 0.3 })
+    burst({ t: t + 0.9, type: 'highpass', f: 2500, q: 0.4, a: 0.8, hold: 0.4, d: 0.9, gain: 0.07, verb: 0.2 })
+    crinkle({ t: t + 1, n: few(30, 12), dur: 1.8, gain: 0.03, f0: 800, f1: 4000, width: 0.9 })
+    buzz([0, 300, 100, 400])
+  })
+})
+
+// Grain: the avalanche coming, a low rumble with distant cracks; k 0..1. ~180 ms.
+export const avalancheRumble = safe(function avalancheRumble(k) {
+  k = clamp(k, 0, 1, 0)
+  const g = rideGrain('avalancheRumble', 180, 0.6, 0.22, k)
+  if (!g) return
+  const t = now()
+  burst({ t, noise: 'brown', type: 'lowpass', f: rnd(70, 130), q: 0.7, a: 0.14, hold: 0.08, d: 0.32, gain: (0.06 + 0.24 * k) * g, pan: rnd(-0.3, 0.3) })
+  if (!COARSE_POINTER) tone({ t, f: rnd(30, 40), a: 0.14, hold: 0.08, d: 0.3, gain: (0.04 + 0.1 * k) * g })
+  if (Math.random() < 0.25 * k) burst({ t: t + rnd(0, 0.1), type: 'highpass', f: rnd(1500, 3000), q: 0.7, a: 0.0008, d: 0.02, gain: 0.06 * k * g, pan: rnd(-0.7, 0.7), verb: 0.5 })
+})
+
+// Gas fire jet, ~1 s: the ignition whump, then a fluttering roar.
+export const fireJet = safe(function fireJet() {
+  if (!gate('fireJet', 1.2, 3, 1, 300)) return
+  loud(() => {
+    const t = now()
+    const pan = rnd(-0.3, 0.3)
+    burst({ t, noise: 'brown', type: 'lowpass', f: 500, q: 0.6, a: 0.004, d: 0.22, gain: 0.42, pan })
+    tone({ t, f: 85, f2: 40, d: 0.2, gain: 0.32 })
+    burst({ t, noise: 'pink', f: 500, f2: 800, q: 0.5, a: 0.06, hold: 0.5, d: 0.35, gain: 0.3, pan })
+    burst({ t, noise: 'brown', type: 'lowpass', f: 350, q: 0.5, a: 0.05, hold: 0.5, d: 0.35, gain: 0.28, pan })
+    burst({ t, type: 'highpass', f: 2800, q: 0.5, a: 0.08, hold: 0.45, d: 0.3, gain: 0.07, pan })
+    crinkle({ t: t + 0.1, n: few(20, 10), dur: 0.8, gain: 0.04, f0: 1200, f1: 4500 })
+    for (let i = 0; i < few(5, 3); i++) burst({ t: t + 0.1 + i * 0.15, noise: 'pink', f: rnd(300, 700), q: 1, a: 0.03, d: 0.12, gain: 0.1, pan })
+  })
+})
+
+// Geyser, ~1.5 s: pressure hiss, the water column roaring up, drops raining back.
+export const geyser = safe(function geyser() {
+  if (!gate('geyser', 1.7, 3, 1, 600)) return
+  loud(() => {
+    const t = now()
+    const pan = rnd(-0.3, 0.3)
+    burst({ t, f: 1800, f2: 5000, q: 0.8, a: 0.22, d: 0.12, gain: 0.12, pan })
+    const e = t + 0.22
+    tone({ t: e, f: 70, f2: 40, d: 0.3, gain: 0.32 })
+    burst({ t: e, noise: 'brown', type: 'lowpass', f: 450, q: 0.6, a: 0.03, hold: 0.55, d: 0.55, gain: 0.42, pan, verb: 0.25 })
+    burst({ t: e, noise: 'pink', f: 1100, q: 0.5, a: 0.04, hold: 0.55, d: 0.55, gain: 0.2, pan, verb: 0.25 })
+    burst({ t: e, type: 'highpass', f: 3000, q: 0.5, a: 0.05, hold: 0.5, d: 0.65, gain: 0.1, pan })
+    bubbles({ t: e, n: few(30, 14), dur: 0.7, f0: 300, f1: 2200, gain: 0.06 })
+    bubbles({ t: e + 0.7, n: few(20, 8), dur: 0.6, f0: 1200, f1: 4000, gain: 0.03, d: [0.008, 0.02] })
+  })
+})
+
+// Lava: one thick, slow bloop and its pop.
+export const lavaBubble = safe(function lavaBubble() {
+  if (!gate('lavaBubble', 0.5, 1, 3, 90)) return
+  const t = now()
+  const pan = rnd(-0.5, 0.5)
+  const d = rnd(0.14, 0.22)
+  bubble({ t, f: vary(110, 0.25), d, gain: 0.32, rise: rnd(1, 1.6), pan })
+  burst({ t: t + d * 0.8, noise: 'brown', type: 'lowpass', f: 280, q: 1, a: 0.004, d: 0.08, gain: 0.18, pan })
+  tone({ t, f: 60, f2: 45, d: 0.1, gain: 0.12, pan })
+  burst({ t: t + d, type: 'highpass', f: 4000, q: 0.5, a: 0.01, d: 0.15, gain: 0.025, pan })
+})
+
+// Magma dripping: a drop that hits and sizzles.
+export const magmaDrip = safe(function magmaDrip() {
+  if (!gate('magmaDrip', 0.6, 1, 3, 90)) return
+  const t = now()
+  const pan = rnd(-0.5, 0.5)
+  bubble({ t, f: vary(700, 0.2), d: 0.04, gain: 0.15, rise: 0.9, pan })
+  burst({ t: t + 0.01, type: 'highpass', f: 4500, q: 0.6, a: 0.004, hold: 0.05, d: 0.35, gain: 0.07, pan })
+  crinkle({ t: t + 0.02, n: few(8, 4), dur: 0.3, gain: 0.025, f0: 3000, f1: 9000, width: 0.3 })
+})
+
+// Crystal chime: i 0..15 steps up a pentatonic scale from G4, glassy with a long shimmering tail.
+export const chime = safe(function chime(i = 0) {
+  const s = Math.round(clamp(i, 0, 15, 0))
+  if (!gate('chime', 2.8, 2, 4, 40)) return
+  const t = now()
+  const f = 392 * semi(PENT5[s % 5] + 12 * Math.floor(s / 5))
+  const pan = (s / 15 - 0.5) * 0.8
+  modal({ t, f, modes: CRYSTAL, gain: 0.11, beat: twin(4), strike: 0.08, pan, verb: 0.55 })
+  modal({ t, f: f * 2.001, modes: [[1, 0.5, 1.6], [2.76, 0.12, 0.7]], gain: 0.03, beat: twin(3), pan, verb: 0.6 })
+})
+
+// A chime run completed: a glassy pentatonic arpeggio flourish and a sparkle.
+export const melody = safe(function melody() {
+  if (!gate('melody', 2.8, 3, 1, 600)) return
+  claim()
+  const t = now()
+  const notes = few([0, 2, 4, 7, 9, 12, 14, 16, 19, 24], [0, 4, 7, 12, 16, 24])
+  notes.forEach((n, i) => {
+    const last = i === notes.length - 1
+    modal({ t: t + i * 0.06, f: 523.25 * semi(n), modes: CRYSTAL, gain: last ? 0.1 : 0.075, decay: last ? 1 : 0.45, beat: twin(4), strike: 0.08, pan: (i / notes.length - 0.5) * 0.8, verb: 0.5 })
+  })
+  for (let i = 0; i < few(6, 3); i++) modal({ t: t + 0.4 + Math.random() * 0.5, f: rnd(4000, 7000), modes: GLASS, gain: 0.02, decay: 0.6, pan: rnd(-0.6, 0.6), verb: 0.4 })
+})
+
+// Grain: a rope bridge creaking under the cart; k 0..1. ~200 ms.
+export const ropeCreak = safe(function ropeCreak(k) {
+  k = clamp(k, 0, 1, 0)
+  const g = rideGrain('ropeCreak', 200, 0.45, 0.1, k)
+  if (!g) return
+  const t = now()
+  creak({ t, rate: rnd(14, 26) * (1 + 0.5 * k), rate2: rnd(10, 30), f: rnd(380, 650), q: 6, body: 2.1, a: 0.06, d: rnd(0.18, 0.3), gain: (0.025 + 0.07 * k) * g, pan: rnd(-0.5, 0.5), verb: 0.1 })
+  if (!COARSE_POINTER && Math.random() < 0.5) burst({ t, noise: 'pink', f: rnd(1500, 2500), q: 4, a: 0.04, d: 0.12, gain: 0.02 * k * g, pan: rnd(-0.4, 0.4) })
+  if (Math.random() < 0.2 * k) modal({ t: t + rnd(0, 0.1), f: rnd(200, 320), modes: WOOD, gain: 0.06 * k * g, pan: rnd(-0.4, 0.4) })
+})
+
+// A big shore wave, ~1.5 s: it rises, slams down, washes and fizzes.
+export const waveCrash = safe(function waveCrash() {
+  if (!gate('waveCrash', 1.7, 3, 1, 800)) return
+  loud(() => {
+    const t = now()
+    const pan = rnd(-0.4, 0.4)
+    burst({ t, noise: 'pink', f: 250, f2: 900, q: 0.6, a: 0.35, d: 0.15, gain: 0.12, pan })
+    const c = t + 0.35
+    burst({ t: c, noise: 'brown', type: 'lowpass', f: 700, f2: 180, q: 0.6, a: 0.015, d: 0.7, gain: 0.45, pan, verb: 0.3 })
+    tone({ t: c, f: 58, f2: 30, d: 0.3, gain: 0.3 })
+    burst({ t: c, noise: 'pink', f: 1500, f2: 500, q: 0.5, a: 0.03, hold: 0.2, d: 0.9, gain: 0.2, pan, verb: 0.3 })
+    burst({ t: c, type: 'highpass', f: 3500, q: 0.4, a: 0.08, hold: 0.25, d: 0.8, gain: 0.09, pan })
+    bubbles({ t: c, n: few(24, 10), dur: 0.8, f0: 400, f1: 3000, gain: 0.04 })
+  })
+})
+
+// Lighthouse horn: a long low two-note diaphone (D2 + A2), lower than bridgeHorn, with the grunt.
+export const foghorn2 = safe(function foghorn2() {
+  if (!gate('foghorn2', 2.4, 3, 1, 1500)) return
+  const ctx = A.ctx
+  const t = now()
+  const len = 2
+  const out = ctx.createGain()
+  out.gain.value = 0.16
+  route(out, { verb: 0.55 })
+  const lp = ctx.createBiquadFilter()
+  lp.type = 'lowpass'
+  lp.frequency.value = 520
+  lp.Q.value = 0.8
+  const amp = ctx.createGain()
+  shape(amp.gain, t, 0.2, 1, 0.35, len - 0.55)
+  lp.connect(amp).connect(out)
+  for (const f of COARSE_POINTER ? [73.4, 110] : [73.4, 73.8, 110]) {
+    const o = ctx.createOscillator()
+    o.type = 'sawtooth'
+    o.frequency.setValueAtTime(f * 0.92, t)
+    o.frequency.exponentialRampToValueAtTime(f, t + 0.2)
+    o.frequency.setValueAtTime(f, t + len - 0.35)
+    o.frequency.exponentialRampToValueAtTime(f * 0.8, t + len)
+    const g = ctx.createGain()
+    g.gain.value = 0.3
+    o.connect(g).connect(lp)
+    o.start(t)
+    o.stop(t + len + 0.05)
+  }
+  burst({ t, noise: 'brown', type: 'lowpass', f: 250, q: 0.6, a: 0.15, hold: 1.5, d: 0.35, gain: 0.1 })
+})
+
+// Temple: stone grinding over stone as the boulder breaks loose, ~1.5 s.
+export const templeRumble = safe(function templeRumble() {
+  if (!gate('templeRumble', 1.7, 3, 1, 800)) return
+  loud(() => {
+    const t = now()
+    burst({ t, noise: 'brown', type: 'lowpass', f: 150, f2: 110, q: 0.7, a: 0.2, hold: 0.8, d: 0.5, gain: 0.5, verb: 0.35 })
+    if (!COARSE_POINTER) tone({ t, f: 40, f2: 36, a: 0.2, hold: 0.8, d: 0.5, gain: 0.16 })
+    creak({ t, rate: 14, rate2: 22, f: 260, q: 3, body: 2.9, a: 0.25, d: 1.2, gain: 0.07, verb: 0.3 })
+    burst({ t, noise: 'pink', f: 700, q: 1.5, a: 0.2, hold: 0.7, d: 0.5, gain: 0.08 })
+    crinkle({ t, n: few(20, 8), dur: 1.3, gain: 0.03, f0: 900, f1: 3500, width: 0.7 })
+    for (let i = 0; i < few(5, 3); i++) modal({ t: t + rnd(0.1, 1.3), f: rnd(250, 600), modes: STONE, gain: rnd(0.05, 0.12), strike: 0.2, pan: rnd(-0.6, 0.6) })
+    buzz([0, 150, 50, 200])
+  })
+})
+
+// Grain: a heavy stone ball rolling, its facets knocking; k 0..1. ~160 ms.
+export const boulderRoll = safe(function boulderRoll(k) {
+  k = clamp(k, 0, 1, 0)
+  const g = rideGrain('boulderRoll', 160, 0.45, 0.12, k)
+  if (!g) return
+  const t = now()
+  burst({ t, noise: 'brown', type: 'lowpass', f: rnd(90, 160), q: 0.8, a: 0.06, hold: 0.06, d: 0.25, gain: (0.06 + 0.26 * k) * g, pan: rnd(-0.2, 0.2) })
+  const f = rnd(42, 58)
+  tone({ t, f, f2: f * 0.85, a: 0.06, hold: 0.06, d: 0.2, gain: (0.04 + 0.14 * k) * g })
+  if (Math.random() < 0.45) modal({ t: t + rnd(0, 0.08), f: rnd(180, 380), modes: STONE, gain: (0.03 + 0.07 * k) * g, strike: 0.2, pan: rnd(-0.3, 0.3) })
+  if (!COARSE_POINTER) crinkle({ t, n: 3, dur: 0.15, gain: 0.015 * k * g, f0: 1000, f1: 3500 })
+})
+
+// The huge gate opening, ~2 s: the lock clunks, the bolt slides, chains run, golden shimmer.
+export const gateUnlock = safe(function gateUnlock() {
+  if (!gate('gateUnlock', 2.3, 4, 1, 1000)) return
+  claim()
+  loud(() => {
+    const t = now()
+    tone({ t, f: 75, f2: 35, d: 0.3, gain: 0.45 })
+    burst({ t, noise: 'brown', type: 'lowpass', f: 700, q: 0.6, a: 0.003, d: 0.25, gain: 0.4 })
+    modal({ t, f: vary(120, 0.03), modes: IRON, gain: 0.26, strike: 0.7, beat: twin(6), decay: 1.2, verb: 0.35 })
+    burst({ t: t + 0.12, noise: 'pink', f: 500, f2: 1100, q: 2.5, a: 0.06, hold: 0.1, d: 0.12, gain: 0.12 })
+    modal({ t: t + 0.4, f: vary(260, 0.03), modes: IRON, gain: 0.14, strike: 0.5, beat: twin(6) })
+    tone({ t: t + 0.4, f: 110, f2: 55, d: 0.12, gain: 0.25 })
+    const n = few(18, 8)
+    for (let i = 0; i < n; i++) modal({ t: t + 0.45 + i * rnd(0.04, 0.07), f: rnd(1400, 2800), modes: IRON, gain: rnd(0.025, 0.05), decay: 0.12, strike: 0.3, pan: Math.sin(i) * 0.4 })
+    creak({ t: t + 0.5, rate: 20, rate2: 12, f: 900, q: 12, body: 2.76, a: 0.2, d: 1, gain: 0.07, verb: 0.3 })
+    burst({ t: t + 0.7, noise: 'pink', f: 600, f2: 5000, q: 0.8, a: 0.6, d: 0.5, gain: 0.1, verb: 0.4 })
+    for (let j = 0; j < few(8, 4); j++) modal({ t: t + 0.8 + j * 0.08, f: C6 * semi(PENT5[j % 5] + 12 * Math.floor(j / 5)), modes: GLASS, gain: 0.05, strike: 0.1, pan: (j / 8 - 0.5) * 0.8, verb: 0.5 })
+    modal({ t: t + 1.3, f: 523.25, modes: BELL, gain: 0.09, beat: twin(4), strike: 0.2, verb: 0.4 })
+    buzz([60, 80, 40])
+  })
+})
+
+// The gate is still locked: a dull thud, a rattle and a low buzz.
+export const gateLocked = safe(function gateLocked() {
+  if (!gate('gateLocked', 0.7, 2, 1, 350)) return
+  const t = now()
+  modal({ t, f: vary(130, 0.03), modes: WOOD, gain: 0.45, strike: 0.15 })
+  tone({ t, f: 85, f2: 40, d: 0.2, gain: 0.4 })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 500, d: 0.15, gain: 0.3 })
+  modal({ t: t + 0.02, f: vary(200, 0.04), modes: IRON, gain: 0.06, decay: 0.4, strike: 0.3 })
+  tone({ t: t + 0.08, type: 'sawtooth', f: 92, a: 0.015, hold: 0.25, d: 0.15, gain: 0.08, lp: 450 })
+  tone({ t: t + 0.08, type: 'square', f: 97, a: 0.015, hold: 0.25, d: 0.15, gain: 0.04, lp: 380 })
+  buzz(40)
+})
+
+// A clean corner: a bright ding climbing with the streak n 0..10.
+export const cornerPerfect = safe(function cornerPerfect(n = 0) {
+  const s = Math.round(clamp(n, 0, 10, 0))
+  if (!gate('cornerPerfect', 0.9, 2, 2, 100)) return
+  claim()
+  const t = now()
+  const f = 784 * semi(PENT5[s % 5] + 12 * Math.floor(s / 5))
+  modal({ t, f, modes: GLOCK, gain: 0.13, strike: 0.12, verb: 0.25 })
+  modal({ t, f: f * 2, modes: COIN, gain: 0.04, decay: 0.5, beat: twin(6) })
+  burst({ t, noise: 'pink', f: 1800, f2: 400, q: 1, a: 0.03, d: 0.2, gain: 0.1 })
+  if (s >= 5) modal({ t: t + 0.07, f: f * 1.5, modes: GLASS, gain: 0.06, strike: 0.1, verb: 0.3 })
+})
+
+// A sloppy corner: a soft, sagging wobble.
+export const cornerSloppy = safe(function cornerSloppy() {
+  if (!gate('cornerSloppy', 0.6, 1, 1, 300)) return
+  const t = now()
+  voc({ t, type: 'sine', path: [[0, 330], [0.35, 230]], a: 0.02, hold: 0.15, d: 0.25, gain: 0.22, formants: [[500, 0.5, 1]], vib: 0.09, vibRate: 7 })
+  modal({ t, f: vary(180, 0.04), modes: WOOD, gain: 0.12 })
+})
+
+// The highest summit: a grand brass fanfare, timpani, cymbal, glockenspiel and a bell.
+export const summitBig = safe(function summitBig() {
+  if (!gate('summitBig', 3, 5, 1, 2000)) return
+  claim()
+  duckAmb(2.8, 0.35)
+  loud(() => {
+    const t = now()
+    ;[392, 523.25, 659.25].forEach((f, i) => {
+      brass(t + i * 0.14, f, 0.09, 0.065, (i - 1) * 0.2)
+      snare(t + i * 0.14)
+    })
+    tone({ t: t + 0.3, f: 73, f2: 66, d: 0.3, gain: 0.25 })
+    const hit = t + 0.45
+    few([523.25, 659.25, 783.99, 1046.5], [523.25, 659.25, 783.99]).forEach((f, i) => brass(hit, f, 1, 0.05, (i - 1.5) * 0.25))
+    tone({ t: hit, f: 98, f2: 88, d: 0.8, gain: 0.35 })
+    cymbal(hit, 0.14, 1.5)
+    glock(hit + 0.1, [0, 4, 7, 12, 16, 19, 24], 0.06, 0.12, 0.35)
+    modal({ t: hit, f: 523.25, modes: BELL, gain: 0.1, beat: twin(4), strike: 0.2, verb: 0.4 })
+    steamWhistle(hit + 1.2, 0.4, 0.045)
+    buzz([40, 60, 40, 60, 100])
+  })
+})
+
+// The end of the line: a brass fanfare (ta-ta-ta-TAAA, IV, V, I), bells and a cheering crowd, ~4 s.
+export const terminus = safe(function terminus() {
+  if (!gate('terminus', 4.5, 5, 1, 3000)) return
+  claim()
+  duckAmb(4.3, 0.3)
+  loud(() => {
+    const t = now()
+    for (let i = 0; i < 3; i++) {
+      brass(t + i * 0.13, 392, 0.07, 0.065, -0.1)
+      snare(t + i * 0.13)
+    }
+    const C4 = 261.63
+    const chords = [
+      [t + 0.4, [0, 4, 7, 12], 0.5, 0.05],
+      [t + 1.0, [5, 9, 12], 0.3, 0.05],
+      [t + 1.4, [7, 11, 14], 0.3, 0.05],
+      [t + 1.85, [12, 16, 19, 24], 1.4, 0.055],
+    ]
+    for (const [at, notes, len, g] of chords) {
+      const use = COARSE_POINTER ? notes.slice(0, 3) : notes
+      use.forEach((n, i) => brass(at, C4 * semi(n), len, g, (i / Math.max(1, use.length - 1) - 0.5) * 0.6))
+      tone({ t: at, f: 98, f2: 88, d: 0.5, gain: 0.3 }) // timpani
+    }
+    const top = t + 1.85
+    cymbal(t + 0.4, 0.1, 0.8)
+    cymbal(top, 0.15, 1.6)
+    ;[1046.5, 1318.5, 1568, 2093].forEach((f, j) => modal({ t: top + j * 0.18, f, modes: BELL, gain: 0.08, beat: twin(4), strike: 0.2, pan: (j / 3 - 0.5) * 0.8, verb: 0.45 }))
+    glock(top + 0.05, [0, 4, 7, 12, 16, 19, 24], 0.06, 0.12, 0.35)
+    applause(3, few(0.9, 0.8), t + 0.5)
+    popper(top, -0.6)
+    popper(top + 0.08, 0.6)
+    buzz([60, 80, 60, 80, 150])
+  })
+})
+
+// Off the glacier lip: an icy whoosh and the ice cracking under the wheels.
+export const glacierJump = safe(function glacierJump() {
+  if (!gate('glacierJump', 1.3, 3, 1, 400)) return
+  const t = now()
+  burst({ t, noise: 'pink', f: 600, f2: 3600, q: 0.8, a: 0.14, hold: 0.1, d: 0.5, gain: 0.26 })
+  burst({ t, type: 'highpass', f: 5000, q: 0.5, a: 0.1, d: 0.5, gain: 0.05 })
+  crack(t + 0.02, 0.8)
+})
+
+// A sharp crack of ice.
+export const iceCrack = safe(function iceCrack() {
+  if (!gate('iceCrack', 0.7, 3, 2, 120)) return
+  crack(now(), 1)
+})
+
+// --- Area ambience (call every frame with k 0..1; only the strongest family plays, see ambGate) ---
+// Jungle: an insect bed, birds chirping, now and then a monkey far off.
+export const jungleAmb = safe(function jungleAmb(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('jungleAmb', k, 600, 1.4)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    burst({ t, f: rnd(4200, 5600), q: rnd(6, 10), a: 0.4, hold: 0.25, d: 0.7, gain: 0.03 + 0.06 * k, pan: rnd(-0.7, 0.7) })
+    burst({ t, noise: 'pink', type: 'lowpass', f: 700, q: 0.5, a: 0.45, hold: 0.2, d: 0.7, gain: 0.05 + 0.07 * k })
+    if (Math.random() < 0.3 * k + 0.08) chirps(t + rnd(0, 0.3), 0.02 + 0.03 * k, rnd(-0.8, 0.8))
+    if (Math.random() < 0.03 * k) {
+      const pan = rnd(-0.9, 0.9)
+      for (let i = 0; i < 3; i++) {
+        const f = rnd(500, 650) * semi(i * 2)
+        voc({ t: t + 0.2 + i * 0.16, path: [[0, f * 0.85], [0.05, f * 1.1], [0.12, f * 0.9]], a: 0.01, hold: 0.04, d: 0.08, gain: 0.12, formants: [[i === 2 ? 950 : 400, 4, 1], [1400, 5, 0.4]], vib: 0.03, vibRate: 18, pan, verb: 0.6 })
+      }
+    }
+  })
+})
+
+// Bayou: frogs croaking, crickets, a bubble in the swamp.
+export const bayouAmb = safe(function bayouAmb(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('bayouAmb', k, 600, 1.4)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    burst({ t, noise: 'pink', type: 'lowpass', f: 450, q: 0.5, a: 0.45, hold: 0.2, d: 0.7, gain: 0.05 + 0.06 * k })
+    if (!COARSE_POINTER || Math.random() < 0.5) {
+      const pan = rnd(-0.8, 0.8)
+      const f = rnd(4300, 4800)
+      for (let r = 0; r < 2; r++) for (let j = 0; j < 3; j++) burst({ t: t + r * 0.25 + j * 0.035, f, q: 12, a: 0.004, d: 0.025, gain: 0.04 * (0.4 + k), pan })
+    }
+    if (Math.random() < 0.45 * k + 0.1) {
+      const bull = Math.random() < 0.25
+      const f = bull ? rnd(65, 80) : rnd(110, 190)
+      const len = bull ? 0.4 : 0.15
+      voc({ t: t + rnd(0, 0.3), path: [[0, f], [len, f * 0.85]], a: 0.01, hold: len * 0.4, d: len * 0.6, gain: 0.12 + 0.12 * k, formants: [[bull ? 250 : 350, 4, 1], [bull ? 600 : 900, 5, 0.5]], growl: 0.6, growlRate: rnd(28, 50), pan: rnd(-0.8, 0.8), verb: 0.2 })
+    }
+    if (Math.random() < 0.3) bubble({ t: t + rnd(0, 0.4), f: rnd(150, 400), d: 0.06, gain: 0.06, rise: 0.8, pan: rnd(-0.6, 0.6) })
+  })
+})
+
+// Sea: surf washing in slow swells, foam fizz, gulls now and then.
+export const seaAmb = safe(function seaAmb(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('seaAmb', k, 600, 1.6)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    const swell = 0.55 + 0.45 * Math.sin((performance.now() / 1000) * ((2 * Math.PI) / 7))
+    burst({ t, noise: 'pink', f: rnd(350, 650), f2: rnd(800, 1400), q: 0.5, a: 0.5, hold: 0.2, d: 0.9, gain: (0.05 + 0.12 * k) * swell, pan: rnd(-0.6, 0.6) })
+    burst({ t, type: 'highpass', f: 3500, q: 0.4, a: 0.3, hold: 0.2, d: 0.8, gain: (0.015 + 0.03 * k) * swell, pan: rnd(-0.6, 0.6) })
+    if (Math.random() < 0.05 * k + 0.02) gullCall(t + rnd(0, 0.4), 0.12, rnd(-0.8, 0.8), 0.5)
+  })
+})
+
+// High mountain wind: a resonant howl wandering in pitch over a broad rush.
+let whF = 700
+export const windHowl = safe(function windHowl(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('windHowl', k, 550, 1.4)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    const f0 = whF
+    whF = clamp(whF + rnd(-120, 120) + (650 + k * 350 - whF) * 0.15, 400, 1300, 700)
+    const pan = rnd(-0.5, 0.5)
+    burst({ t, noise: 'pink', f: f0, f2: whF, q: 5 + 3 * k, a: 0.45, hold: 0.2, d: 0.7, gain: 0.04 + 0.12 * k, pan })
+    burst({ t, noise: 'pink', type: 'lowpass', f: 600 + 600 * k, q: 0.5, a: 0.45, hold: 0.2, d: 0.7, gain: 0.04 + 0.1 * k })
+    if (!COARSE_POINTER) burst({ t, noise: 'pink', f: f0 * 2.2, f2: whF * 2.2, q: 9, a: 0.45, hold: 0.2, d: 0.7, gain: 0.015 + 0.03 * k, pan: -pan })
+  })
+})
+
+// Lava fields: a deep rumble and thick bubbling, a hiss now and then.
+export const lavaAmb = safe(function lavaAmb(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('lavaAmb', k, 600, 1.4)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    burst({ t, noise: 'brown', type: 'lowpass', f: rnd(70, 120), q: 0.7, a: 0.45, hold: 0.2, d: 0.7, gain: 0.1 + 0.18 * k })
+    if (!COARSE_POINTER) tone({ t, f: rnd(30, 38), a: 0.45, hold: 0.2, d: 0.7, gain: 0.04 + 0.06 * k })
+    if (Math.random() < 0.5 * k + 0.1) {
+      const at = t + rnd(0, 0.4)
+      const d = rnd(0.12, 0.25)
+      const pan = rnd(-0.7, 0.7)
+      bubble({ t: at, f: rnd(60, 150), d, rise: rnd(0.8, 1.5), gain: 0.12 + 0.1 * k, pan })
+      burst({ t: at + d * 0.8, noise: 'brown', type: 'lowpass', f: 300, q: 1, a: 0.004, d: 0.07, gain: 0.08, pan })
+    }
+    if (Math.random() < 0.15) burst({ t: t + rnd(0, 0.4), type: 'highpass', f: 4500, q: 0.5, a: 0.05, d: 0.4, gain: 0.02, pan: rnd(-0.6, 0.6) })
+  })
+})
+
+// Cave: drips ringing in the dark, a hollow airy tone, a low breath.
+export const caveAmb = safe(function caveAmb(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('caveAmb', k, 600, 1.4)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    burst({ t, noise: 'pink', f: rnd(170, 260), q: 12, a: 0.5, hold: 0.2, d: 0.7, gain: 0.06 + 0.1 * k })
+    burst({ t, noise: 'pink', type: 'lowpass', f: 400, q: 0.5, a: 0.5, hold: 0.2, d: 0.7, gain: 0.03 + 0.05 * k })
+    if (Math.random() < 0.3 * k + 0.08) {
+      const f = rnd(1200, 2600)
+      const pan = rnd(-0.7, 0.7)
+      const at = t + rnd(0, 0.4)
+      bubble({ t: at, f, d: 0.03, gain: 0.07, rise: 0.6, pan, verb: 1.2 })
+      if (Math.random() < 0.4) bubble({ t: at + 0.14, f: f * 1.3, d: 0.025, gain: 0.035, rise: 0.5, pan, verb: 1 })
+    }
+  })
+})
+
+// Wild west: dry wind with grit, a distant creak or a whistle through a gap.
+export const westAmb = safe(function westAmb(k) {
+  k = clamp(k, 0, 1, 0)
+  const bus = ambGate('westAmb', k, 600, 1.4)
+  if (!bus) return
+  withBus(bus, () => {
+    const t = now()
+    burst({ t, noise: 'pink', f: rnd(600, 1300), f2: rnd(600, 1300), q: 0.9, a: 0.45, hold: 0.2, d: 0.7, gain: 0.04 + 0.1 * k, pan: rnd(-0.6, 0.6) })
+    if (!COARSE_POINTER) crinkle({ t, n: 3, dur: 0.5, gain: 0.006 + 0.012 * k, f0: 3000, f1: 8000, width: 0.8 })
+    const r = Math.random()
+    if (r < 0.05 * k + 0.01) creak({ t: t + rnd(0, 0.3), rate: rnd(15, 25), rate2: rnd(12, 30), f: rnd(500, 800), q: 7, a: 0.1, d: 0.4, gain: 0.03, pan: rnd(-0.8, 0.8), verb: 0.4 })
+    else if (r < 0.08 * k + 0.02) {
+      const f = rnd(1100, 1500)
+      tone({ t: t + rnd(0, 0.3), f, f2: f * rnd(0.8, 1.2), a: 0.15, hold: 0.2, d: 0.4, gain: 0.015, pan: rnd(-0.8, 0.8), verb: 0.6 })
+    }
+  })
+})

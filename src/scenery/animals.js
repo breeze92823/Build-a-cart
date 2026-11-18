@@ -500,6 +500,369 @@ function shepherd(rig, o, rnd) {
   return { r, c: null, a: { family: 'biped', height: 1.85, freq: 0.9, waveArm: 0, staff: 1 } }
 }
 
+// --- Wild kinds (bull, longhorn, jaguar, monkey, alligator, polar bear, penguin,
+// goat, crab). Extra animation params in `a`: ram / ramTip (neck + head pitch for
+// 'ram'), tuck (0 = cat leap with legs stretched, 1 = goat leap with front legs
+// tucked), snap (jaw opening for 'snap'), swimTuck / swimHead / swimPitch,
+// climb (monkey: 'climb' + 'steal'), waddle (penguin), post (extra per-kind pass).
+function bull(rig, o) {
+  const coat = tint(o.color || '#2c1e18', o.shade)
+  const M = fur(coat)
+  const coatM = mat(coat)
+  const legM = mat(tint(coat, 0.85))
+  const snout = mat('#5e4238')
+  const dark = mat('#120e0c', 0.4)
+  const hoof = mat('#141010', 0.6)
+  const horn = mat('#efe6cc', 0.55)
+  const hornTip = mat('#9a8e74', 0.5)
+  const c = {
+    hipY: 0.92, backZ: 0.62, shY: 0.98, frontZ: -0.6, legX: 0.28, cy: 1.22, cz: 0,
+    neck: [1.42, -0.78], tip: [1.3, -1.08], tail: [1.5, 0.86],
+    front: { thigh: coatM, shin: legM, hoof, tw: 0.24, td: 0.3, sw: 0.15, hw: 0.17, hh: 0.09, hd: 0.2 },
+    hind: { thigh: coatM, shin: legM, hoof, tw: 0.24, td: 0.38, sw: 0.15, hw: 0.17, hh: 0.09, hd: 0.2 },
+  }
+  const r = quadRig(rig, c)
+  sb(r.breath, M, 0, 1.22, 0, 0.9, 0.74, 1.72)
+  sb(r.breath, M, 0, 1.62, -0.42, 0.72, 0.24, 0.62) // shoulder hump
+  link(r.head, coatM, 0, 1.42, -0.72, 1.32, -1.1, 0.5, 0.52, 0, true)
+  bx(r.tip, coatM, 0, 1.3, -1.2, 0.46, 0.46, 0.48, 0, 0, 0, true)
+  r.muzzle = bx(r.tip, snout, 0, 1.14, -1.5, 0.38, 0.28, 0.2)
+  bx(r.tip, dark, 0, 1.19, -1.605, 0.22, 0.06, 0.02)
+  mesh(r.tip, G.hook, mat('#e8b84a', 0.3, 0.8), 0, 1.13, -1.62, 0.07, 0.07, 0.07, 0, 0, Math.PI) // nose ring
+  r.jaw = grp(r.tip, 0, 1.02, -1.34)
+  bx(r.jaw, snout, 0, 1.0, -1.48, 0.3, 0.07, 0.24)
+  eyesOn(r, r.tip, 0.232, 1.38, -1.3, 0.012, 0.06, 0.06)
+  earsOn(r, coatM, G.box, 0.22, 1.42, -1.12, 0.32, 1.42, -1.12, 0.18, 0.06, 0.1, 0.25)
+  for (const s of SIDES) {
+    bx(r.tip, horn, s * 0.3, 1.52, -1.1, 0.24, 0.09, 0.09, 0, 0, s * 0.25)
+    bx(r.tip, hornTip, s * 0.44, 1.64, -1.15, 0.07, 0.2, 0.07, -0.35, 0, -s * 0.35)
+  }
+  link(r.tail, coatM, 0, 1.5, 0.86, 0.9, 0.92, 0.06, 0.06)
+  bx(r.tail, dark, 0, 0.84, 0.93, 0.1, 0.18, 0.1)
+  return { r, c, a: { family: 'quad', height: 1.76, freq: 0.75, run: 'gallop', gz: grazeCfg(c, -1.3, -0.5, -0.12), rear: 0.6, tailAxis: 'z', charge: -0.6, ram: -0.95, ramTip: -0.1 } }
+}
+
+function longhorn(rig, o) {
+  const tan = tint(o.color || '#b8743a', o.shade)
+  const T = fur(tan)
+  const tanM = mat(tan)
+  const W = fur('#f2ebde')
+  const whiteM = mat('#f2ebde')
+  const pink = mat('#d9a08e')
+  const hoof = mat('#2a2420', 0.6)
+  const horn = mat('#ece2c6', 0.55)
+  const hornTip = mat('#8a7a5e', 0.5)
+  const c = {
+    hipY: 0.9, backZ: 0.56, shY: 0.92, frontZ: -0.56, legX: 0.23, cy: 1.14, cz: 0,
+    neck: [1.22, -0.74], tip: [1.2, -1.02], tail: [1.4, 0.78],
+    front: { thigh: tanM, shin: whiteM, hoof, tw: 0.17, td: 0.23, sw: 0.11, hw: 0.12, hh: 0.08, hd: 0.15 },
+    hind: { thigh: tanM, shin: whiteM, hoof, tw: 0.17, td: 0.3, sw: 0.11, hw: 0.12, hh: 0.08, hd: 0.15 },
+  }
+  const r = quadRig(rig, c)
+  sb(r.breath, T, 0, 1.14, 0, 0.74, 0.58, 1.5)
+  sb(r.breath, W, -0.2, 1.22, 0.22, 0.36, 0.44, 0.52)
+  sb(r.breath, W, 0.22, 1.1, -0.28, 0.32, 0.42, 0.44)
+  link(r.head, tanM, 0, 1.3, -0.66, 1.26, -1.0, 0.32, 0.36, 0, true)
+  bx(r.tip, whiteM, 0, 1.26, -1.1, 0.32, 0.34, 0.4, 0, 0, 0, true)
+  bx(r.tip, tanM, 0, 1.36, -1.1, 0.34, 0.14, 0.3) // tan band over the eyes
+  r.muzzle = bx(r.tip, pink, 0, 1.12, -1.36, 0.28, 0.2, 0.16)
+  r.jaw = grp(r.tip, 0, 1.04, -1.22)
+  bx(r.jaw, pink, 0, 1.02, -1.33, 0.24, 0.05, 0.18)
+  eyesOn(r, r.tip, 0.172, 1.36, -1.16, 0.012, 0.045, 0.045)
+  earsOn(r, tanM, G.box, 0.16, 1.32, -0.98, 0.26, 1.3, -0.98, 0.16, 0.05, 0.09, 0.3)
+  // Very wide horns (~1.9 m tip to tip): a long bar each side, tips curving up and forward.
+  for (const s of SIDES) {
+    bx(r.tip, horn, s * 0.5, 1.46, -1.0, 0.76, 0.075, 0.075, 0, 0, s * 0.08)
+    bx(r.tip, hornTip, s * 0.92, 1.57, -1.06, 0.06, 0.24, 0.06, -0.3, 0, -s * 0.55)
+  }
+  link(r.tail, tanM, 0, 1.4, 0.78, 0.82, 0.82, 0.05, 0.05)
+  bx(r.tail, whiteM, 0, 0.78, 0.83, 0.09, 0.15, 0.09)
+  return { r, c, a: { family: 'quad', height: 1.62, freq: 0.8, run: 'gallop', gz: grazeCfg(c, -1.35, -0.5, -0.12), rear: 0.6, tailAxis: 'z', charge: -0.55, ram: -0.9, ramTip: 0 } }
+}
+
+function jaguar(rig, o) {
+  const coat = tint(o.color || '#d99a3a', o.shade)
+  const M = fur(coat)
+  const coatM = mat(coat)
+  const light = mat('#f3e2c0')
+  const spot = mat('#2a1c12', 0.8)
+  const paw = mat(tint(coat, 0.85))
+  const c = {
+    hipY: 0.6, backZ: 0.4, shY: 0.62, frontZ: -0.42, legX: 0.13, cy: 0.76, cz: -0.02,
+    neck: [0.82, -0.5], tip: [0.86, -0.62], tail: [0.84, 0.5],
+    front: { thigh: coatM, shin: coatM, hoof: paw, tw: 0.13, td: 0.17, sw: 0.1, sd: 0.11, hw: 0.13, hh: 0.06, hd: 0.15 },
+    hind: { thigh: coatM, shin: coatM, hoof: paw, tw: 0.14, td: 0.24, sw: 0.1, sd: 0.11, hw: 0.13, hh: 0.06, hd: 0.15 },
+  }
+  const r = quadRig(rig, c)
+  sb(r.breath, M, 0, 0.76, -0.02, 0.42, 0.34, 1.06)
+  bx(r.breath, light, 0, 0.6, -0.08, 0.32, 0.04, 0.8)
+  // Rosettes: a few dark squares on the flanks and back.
+  bx(r.breath, spot, -0.212, 0.82, -0.24, 0.012, 0.08, 0.1)
+  bx(r.breath, spot, -0.212, 0.7, 0.16, 0.012, 0.07, 0.09)
+  bx(r.breath, spot, 0.212, 0.78, -0.04, 0.012, 0.08, 0.1)
+  bx(r.breath, spot, 0.08, 0.931, 0.24, 0.1, 0.012, 0.09)
+  link(r.head, coatM, 0, 0.8, -0.46, 0.88, -0.62, 0.24, 0.24, 0, true)
+  sb(r.tip, M, 0, 0.9, -0.7, 0.3, 0.26, 0.26)
+  r.muzzle = bx(r.tip, light, 0, 0.84, -0.88, 0.18, 0.12, 0.12)
+  bx(r.tip, mat('#8a4a3a', 0.45), 0, 0.88, -0.945, 0.07, 0.04, 0.02)
+  r.jaw = grp(r.tip, 0, 0.8, -0.78)
+  bx(r.jaw, light, 0, 0.78, -0.87, 0.15, 0.04, 0.13)
+  eyesOn(r, r.tip, 0.075, 0.95, -0.836, 0.05, 0.035, 0.012)
+  earsOn(r, coatM, G.box, 0.1, 1.03, -0.66, 0.11, 1.07, -0.66, 0.08, 0.08, 0.04, 0.15)
+  // Long tail: three segments, down then curling up to a dark tip.
+  link(r.tail, coatM, 0, 0.86, 0.5, 0.62, 0.86, 0.08, 0.08, 0.02, true)
+  const t2 = grp(r.tail, 0, 0.62, 0.86)
+  link(t2, coatM, 0, 0.62, 0.86, 0.5, 1.18, 0.075, 0.075, 0.02)
+  const t3 = grp(t2, 0, 0.5, 1.18)
+  link(t3, spot, 0, 0.5, 1.18, 0.56, 1.38, 0.08, 0.08, 0.02)
+  r.extra.push(t2, t3)
+  r.tail2 = t2
+  r.tail3 = t3
+  return { r, c, a: { family: 'quad', height: 1.07, freq: 1.3, run: 'gallop', gz: grazeCfg(c, -0.9, -0.3, -0.08), rear: 0.9, tailAxis: 'y', charge: -0.3, tuck: 0 } }
+}
+
+function polarbear(rig, o) {
+  const coat = tint(o.color || '#f1eee4', o.shade)
+  const M = fur(coat)
+  const coatM = mat(coat)
+  const paw = mat(tint(coat, 0.86))
+  const dark = mat('#141416', 0.35)
+  const c = {
+    hipY: 0.95, backZ: 0.58, shY: 0.98, frontZ: -0.62, legX: 0.3, cy: 1.18, cz: 0,
+    neck: [1.28, -0.78], tip: [1.22, -1.18], tail: [1.36, 0.84],
+    front: { thigh: coatM, shin: coatM, hoof: paw, tw: 0.3, td: 0.34, sw: 0.26, sd: 0.28, hw: 0.3, hh: 0.11, hd: 0.36 },
+    hind: { thigh: coatM, shin: coatM, hoof: paw, tw: 0.32, td: 0.44, sw: 0.26, sd: 0.28, hw: 0.3, hh: 0.11, hd: 0.36 },
+  }
+  const r = quadRig(rig, c)
+  sb(r.breath, M, 0, 1.18, 0, 1.0, 0.8, 1.72)
+  sb(r.breath, M, 0, 1.6, 0.25, 0.7, 0.14, 0.7) // high rump
+  link(r.head, coatM, 0, 1.3, -0.72, 1.24, -1.14, 0.5, 0.46, 0.06, true) // long neck
+  sb(r.tip, M, 0, 1.24, -1.24, 0.44, 0.38, 0.42)
+  r.muzzle = bx(r.tip, coatM, 0, 1.15, -1.54, 0.26, 0.2, 0.26)
+  bx(r.tip, dark, 0, 1.22, -1.675, 0.12, 0.08, 0.03)
+  r.jaw = grp(r.tip, 0, 1.06, -1.38)
+  bx(r.jaw, coatM, 0, 1.04, -1.52, 0.22, 0.06, 0.24)
+  eyesOn(r, r.tip, 0.11, 1.32, -1.456, 0.055, 0.055, 0.012)
+  earsOn(r, coatM, G.box, 0.15, 1.42, -1.12, 0.18, 1.47, -1.12, 0.11, 0.1, 0.06, 0.2)
+  bx(r.tail, coatM, 0, 1.32, 0.88, 0.14, 0.14, 0.1)
+  const claw = mat('#2c2a28', 0.5)
+  for (let i = 0; i < 2; i++) bx(r.knees[i], claw, SIDES[i] * c.legX, 0.035, c.frontZ - 0.24, 0.26, 0.045, 0.04)
+  return { r, c, a: { family: 'quad', height: 1.7, freq: 0.8, run: 'gallop', gz: grazeCfg(c, -0.9, -0.35, -0.1), rear: 1.2, tailAxis: 'z', charge: -0.35, tuck: 0.3, swimHead: 0.3, swimPitch: 0.06 } }
+}
+
+function monkey(rig, o) {
+  const coat = tint(o.color || '#7a5230', o.shade)
+  const M = mat(coat)
+  const face = mat('#e8c49a')
+  const dark = mat(tint(coat, 0.7))
+  const c = {
+    hipY: 0.26, backZ: 0.13, shY: 0.4, frontZ: -0.13, legX: 0.08, cy: 0.42, cz: 0,
+    neck: [0.52, -0.16], tip: [0.58, -0.2], tail: [0.32, 0.16],
+    front: { thigh: M, shin: M, hoof: face, tw: 0.06, td: 0.07, sw: 0.05, hw: 0.065, hh: 0.035, hd: 0.08 },
+    hind: { thigh: M, shin: M, hoof: face, tw: 0.08, td: 0.1, sw: 0.055, hw: 0.07, hh: 0.035, hd: 0.1 },
+  }
+  const r = quadRig(rig, c)
+  // Long arms (front legs) put the shoulders well above the hips: the back slopes up.
+  link(r.breath, M, 0, 0.3, 0.15, 0.48, -0.16, 0.2, 0.18, 0.06, true)
+  link(r.breath, face, 0, 0.266, 0.13, 0.446, -0.18, 0.15, 0.14)
+  bx(r.tip, M, 0, 0.6, -0.24, 0.2, 0.19, 0.18, 0, 0, 0, true)
+  bx(r.tip, face, 0, 0.59, -0.335, 0.15, 0.13, 0.02)
+  r.muzzle = bx(r.tip, face, 0, 0.54, -0.35, 0.1, 0.07, 0.06)
+  r.jaw = grp(r.tip, 0, 0.51, -0.3)
+  bx(r.jaw, face, 0, 0.5, -0.35, 0.08, 0.03, 0.06)
+  eyesOn(r, r.tip, 0.035, 0.61, -0.347, 0.035, 0.035, 0.012)
+  earsOn(r, face, G.box, 0.1, 0.61, -0.24, 0.115, 0.61, -0.24, 0.03, 0.07, 0.06, 0.1)
+  // Curly tail: up and back, over, then curling forward.
+  link(r.tail, M, 0, 0.32, 0.16, 0.52, 0.34, 0.04, 0.04, 0.02)
+  const t2 = grp(r.tail, 0, 0.52, 0.34)
+  link(t2, M, 0, 0.52, 0.34, 0.68, 0.3, 0.04, 0.04, 0.02)
+  const t3 = grp(t2, 0, 0.68, 0.3)
+  link(t3, dark, 0, 0.68, 0.3, 0.64, 0.2, 0.04, 0.04, 0.02)
+  r.extra.push(t2, t3)
+  r.tail2 = t2
+  r.tail3 = t3
+  r.arms = [r.legs[0], r.legs[1]]
+  return { r, c, a: { family: 'quad', height: 0.72, freq: 1.8, run: 'bound', gz: grazeCfg(c, -0.6, -0.3, -0.05), rear: 1.0, tailAxis: 'z', charge: -0.25, pawA: 0.3, pawB: 0.5, climb: true, tuck: 0.2 } }
+}
+
+// Alligator pass after the quad pose: shorter leg swings and less roll on the
+// stubby legs, the tail kept level with the ground (never pitched into it) and a
+// lateral S-wave down the three tail pieces in every mode.
+function gatorTail(u, T, mode, sp) {
+  let a = 0.06
+  let f = 0.35
+  if (mode === 'walk' || mode === 'run' || mode === 'charge' || mode === 'ram') {
+    for (let i = 0; i < 4; i++) {
+      u.legs[i].rotation.x *= 0.55
+      u.knees[i].rotation.x *= 0.55
+    }
+    u.body.rotation.z *= 0.4
+  }
+  if (mode === 'swim') {
+    a = 0.32
+    f = 1.1 * sp
+  } else if (mode === 'walk') {
+    a = 0.14
+    f = u._freq * sp
+  } else if (mode === 'run' || mode === 'charge' || mode === 'ram') {
+    a = 0.2
+    f = u._freq * sp * 1.9
+  } else if (mode === 'snap') {
+    a = 0.16
+    f = 1.4 * sp
+  }
+  const w = TAU * f * T
+  const s = u._seg
+  u.tail.rotation.x = -u.body.rotation.x
+  u.tail.rotation.y = a * sin(w)
+  s[0].rotation.y = a * 1.3 * sin(w - 1)
+  s[1].rotation.y = a * 1.6 * sin(w - 2)
+}
+
+function alligator(rig, o) {
+  const skin = tint(o.color || '#4f6b2e', o.shade)
+  const S = fur(skin)
+  const skinM = mat(skin)
+  const dark = mat(tint(skin, 0.7))
+  const teeth = mat('#f4f0e2', 0.5)
+  const c = {
+    hipY: 0.26, backZ: 0.38, shY: 0.26, frontZ: -0.36, legX: 0.3, cy: 0.34, cz: 0,
+    neck: [0.34, -0.56], tip: [0.34, -0.66], tail: [0.32, 0.6],
+    front: { thigh: skinM, shin: skinM, hoof: dark, tw: 0.13, td: 0.14, sw: 0.1, hw: 0.16, hh: 0.05, hd: 0.18 },
+    hind: { thigh: skinM, shin: skinM, hoof: dark, tw: 0.15, td: 0.18, sw: 0.11, hw: 0.17, hh: 0.05, hd: 0.2 },
+  }
+  const r = quadRig(rig, c)
+  sb(r.breath, S, 0, 0.34, 0, 0.56, 0.26, 1.2)
+  sb(r.breath, fur(tint(skin, 0.7)), 0, 0.5, 0.04, 0.3, 0.06, 1.04) // back scutes
+  bx(r.head, skinM, 0, 0.34, -0.68, 0.46, 0.24, 0.26, 0, 0, 0, true)
+  sb(r.tip, S, 0, 0.38, -0.89, 0.4, 0.18, 0.34)
+  r.muzzle = bx(r.tip, skinM, 0, 0.35, -1.27, 0.28, 0.1, 0.46, 0, 0, 0, true)
+  for (const s of SIDES) bx(r.tip, skinM, s * 0.13, 0.49, -0.84, 0.1, 0.07, 0.12) // eye bumps
+  eyesOn(r, r.tip, 0.13, 0.5, -0.902, 0.06, 0.04, 0.012)
+  for (const s of SIDES) bx(r.tip, teeth, s * 0.125, 0.285, -1.24, 0.02, 0.03, 0.48)
+  // Big lower jaw: jaw.rotation.x negative opens it.
+  r.jaw = grp(r.tip, 0, 0.3, -0.78)
+  bx(r.jaw, skinM, 0, 0.255, -1.14, 0.3, 0.08, 0.74, 0, 0, 0, true)
+  bx(r.jaw, mat('#d77a78', 0.7), 0, 0.297, -1.08, 0.22, 0.008, 0.56)
+  for (const s of SIDES) bx(r.jaw, teeth, s * 0.125, 0.31, -1.2, 0.02, 0.03, 0.44)
+  sb(r.tail, S, 0, 0.32, 0.8, 0.4, 0.2, 0.42)
+  const t2 = grp(r.tail, 0, 0.31, 0.99)
+  sb(t2, S, 0, 0.3, 1.18, 0.28, 0.16, 0.4)
+  const t3 = grp(t2, 0, 0.29, 1.36)
+  bx(t3, skinM, 0, 0.28, 1.53, 0.16, 0.12, 0.36, 0, 0, 0, true)
+  r.extra.push(t2, t3)
+  r.seg = [t2, t3]
+  return { r, c, a: { family: 'quad', height: 0.55, freq: 1.0, run: 'waddle', gz: grazeCfg(c, 0.02, 0, -0.02), rear: 0.35, tailAxis: 'y', charge: -0.1, ram: 0, ramTip: 0.05, snap: 0.8, swimTuck: 1, swimHead: 0.05, swimPitch: 0, tuck: 0.3, pounceHead: 0, post: gatorTail } }
+}
+
+function goat(rig, o) {
+  const woolC = tint(o.color || '#f4f1e8', o.shade)
+  const W = fur(woolC)
+  const woolM = mat(woolC)
+  const face = mat(tint(woolC, 0.95))
+  const black = mat('#1c1a18', 0.5)
+  const c = {
+    hipY: 0.58, backZ: 0.3, shY: 0.6, frontZ: -0.32, legX: 0.13, cy: 0.82, cz: 0,
+    neck: [0.92, -0.38], tip: [1.06, -0.52], tail: [0.96, 0.44],
+    front: { thigh: woolM, shin: woolM, hoof: black, tw: 0.15, td: 0.18, sw: 0.08, hw: 0.09, hh: 0.06, hd: 0.11 },
+    hind: { thigh: woolM, shin: woolM, hoof: black, tw: 0.16, td: 0.22, sw: 0.08, hw: 0.09, hh: 0.06, hd: 0.11 },
+  }
+  const r = quadRig(rig, c)
+  sb(r.breath, W, 0, 0.82, 0, 0.44, 0.44, 0.88)
+  sb(r.breath, W, 0, 1.05, -0.24, 0.38, 0.14, 0.36) // shoulder hump
+  sb(r.breath, W, 0, 0.6, -0.02, 0.5, 0.14, 0.76) // shaggy skirt
+  link(r.head, woolM, 0, 0.9, -0.34, 1.06, -0.54, 0.2, 0.22, 0.06, true)
+  bx(r.tip, face, 0, 1.08, -0.6, 0.2, 0.22, 0.26, 0, 0, 0, true)
+  r.muzzle = bx(r.tip, face, 0, 1.01, -0.78, 0.14, 0.14, 0.14)
+  bx(r.tip, mat('#2a2624', 0.5), 0, 1.04, -0.855, 0.08, 0.04, 0.012)
+  r.jaw = grp(r.tip, 0, 0.95, -0.7)
+  bx(r.jaw, face, 0, 0.94, -0.78, 0.11, 0.04, 0.13)
+  bx(r.jaw, woolM, 0, 0.86, -0.74, 0.08, 0.14, 0.07) // beard
+  eyesOn(r, r.tip, 0.102, 1.11, -0.64, 0.012, 0.04, 0.04)
+  earsOn(r, face, G.box, 0.1, 1.14, -0.52, 0.16, 1.13, -0.52, 0.12, 0.04, 0.06, 0.35)
+  for (const s of SIDES) {
+    bx(r.tip, black, s * 0.055, 1.25, -0.56, 0.04, 0.14, 0.045, 0.35)
+    bx(r.tip, black, s * 0.06, 1.343, -0.494, 0.035, 0.1, 0.04, 1.0)
+  }
+  bx(r.tail, woolM, 0, 0.92, 0.47, 0.08, 0.12, 0.06)
+  return { r, c, a: { family: 'quad', height: 1.36, freq: 1.3, run: 'bound', gz: grazeCfg(c, -1.2, -0.45, -0.1), rear: 0.9, tailAxis: 'z', charge: -0.5, ram: -0.75, ramTip: -0.55, tuck: 1 } }
+}
+
+function penguin(rig, o) {
+  const back = tint(o.color || '#1e2230', o.shade)
+  const B = mat(back)
+  const white = mat('#f6f6f2')
+  const orange = mat('#f0902a', 0.6)
+  const yellow = mat('#ffc840', 0.6)
+  const body = grp(rig, 0, 0.1, 0)
+  const breath = grp(body, 0, 0.34, 0)
+  const r = { body, breath, legs: [], knees: [], ears: [], eyes: [], jaw: null, arms: null, wings: [], extra: [] }
+  bx(breath, B, 0, 0.34, 0.02, 0.36, 0.5, 0.3, 0, 0, 0, true)
+  bx(breath, white, 0, 0.32, -0.125, 0.28, 0.4, 0.03)
+  r.tail = grp(body, 0, 0.12, 0.16)
+  bx(r.tail, B, 0, 0.09, 0.2, 0.14, 0.03, 0.1, -0.5)
+  for (const s of SIDES) {
+    const w = grp(body, s * 0.18, 0.5, 0)
+    bx(w, B, s * 0.195, 0.34, 0.02, 0.03, 0.32, 0.14, 0, 0, 0, true)
+    r.wings.push(w)
+    const l = grp(rig, s * 0.08, 0.1, 0.02)
+    bx(l, orange, s * 0.08, 0.06, 0.02, 0.06, 0.08, 0.06)
+    bx(l, orange, s * 0.08, 0.012, -0.03, 0.1, 0.024, 0.16)
+    r.legs.push(l)
+  }
+  r.head = grp(body, 0, 0.58, 0)
+  r.tip = grp(r.head, 0, 0.62, -0.02)
+  bx(r.tip, B, 0, 0.68, -0.02, 0.26, 0.2, 0.24, 0, 0, 0, true)
+  bx(r.tip, white, 0, 0.67, -0.145, 0.2, 0.12, 0.012)
+  for (const s of SIDES) bx(r.tip, yellow, s * 0.131, 0.65, 0.0, 0.012, 0.08, 0.1)
+  eyesOn(r, r.tip, 0.055, 0.7, -0.153, 0.04, 0.04, 0.012)
+  r.muzzle = bx(r.tip, orange, 0, 0.655, -0.19, 0.07, 0.04, 0.1)
+  return { r, c: null, a: { family: 'bird', height: 0.78, freq: 2.2, waddle: true }, scale: 0.9 }
+}
+
+// Crab: legs [L front, L mid, L back, R front, R mid, R back] on the rig (rotation.z
+// lifts), claws on `arms` (rotation.x raises, rotation.y folds in), pincer fingers
+// in userData.pincers (rotation.x opens). Eye stalks are its `ears`.
+const CRAB_SIDE = [-1, -1, -1, 1, 1, 1]
+const CRAB_PH = [0, 0.5, 0, 0.5, 0, 0.5]
+function crab(rig, o) {
+  const shellC = tint(o.color || '#e2502e', o.shade)
+  const S = mat(shellC, 0.6)
+  const dark = mat(tint(shellC, 0.72), 0.6)
+  const body = grp(rig, 0, 0.1, 0)
+  const breath = grp(body, 0, 0.14, 0)
+  const r = { body, breath, legs: [], knees: [], ears: [], eyes: [], jaw: null, arms: [], wings: null, extra: [], pincers: [] }
+  bx(breath, S, 0, 0.14, 0, 0.32, 0.09, 0.22, 0, 0, 0, true)
+  bx(breath, mat('#f7d6b4'), 0, 0.09, 0, 0.26, 0.02, 0.18)
+  bx(breath, dark, 0, 0.12, -0.112, 0.08, 0.03, 0.01)
+  r.head = grp(body, 0, 0.17, -0.08)
+  r.tip = grp(r.head, 0, 0.17, -0.08)
+  for (const s of SIDES) {
+    const st = grp(r.tip, s * 0.05, 0.17, -0.09)
+    bx(st, S, s * 0.05, 0.215, -0.09, 0.018, 0.09, 0.018)
+    r.eyes.push(bx(st, EYE, s * 0.05, 0.27, -0.09, 0.04, 0.04, 0.04))
+    r.ears.push(st)
+    const arm = grp(body, s * 0.13, 0.13, -0.09)
+    bx(arm, S, s * 0.16, 0.13, -0.145, 0.04, 0.04, 0.13, 0, -s * 0.5, 0)
+    bx(arm, S, s * 0.2, 0.14, -0.26, 0.08, 0.07, 0.1, 0, 0, 0, true)
+    bx(arm, S, s * 0.2, 0.125, -0.355, 0.045, 0.028, 0.1)
+    const f = grp(arm, s * 0.2, 0.165, -0.305)
+    bx(f, dark, s * 0.2, 0.165, -0.355, 0.04, 0.025, 0.1)
+    r.arms.push(arm)
+    r.extra.push(f)
+    r.pincers.push(f)
+  }
+  for (let i = 0; i < 6; i++) {
+    const s = CRAB_SIDE[i]
+    const z = -0.06 + (i % 3) * 0.06
+    const l = grp(rig, s * 0.15, 0.12, z)
+    bx(l, S, s * 0.195, 0.14, z, 0.1, 0.025, 0.025, 0, 0, s * 0.42)
+    bx(l, dark, s * 0.265, 0.08, z, 0.022, 0.17, 0.022, 0, 0, s * 0.3)
+    r.legs.push(l)
+  }
+  return { r, c: null, a: { family: 'crab', height: 0.32, freq: 3.2 } }
+}
+
 const BUILDERS = {
   deer: (rig, o) => deer(rig, o, false),
   stag: (rig, o) => deer(rig, o, true),
@@ -514,6 +877,15 @@ const BUILDERS = {
   squirrel,
   farmer,
   shepherd,
+  bull,
+  longhorn,
+  jaguar,
+  monkey,
+  alligator,
+  polarbear,
+  penguin,
+  goat,
+  crab,
 }
 export const ANIMAL_KINDS = Object.keys(BUILDERS)
 
@@ -527,7 +899,7 @@ export function buildAnimal(kind, opts = {}) {
   const root = new Group()
   root.name = kind
   const rig = grp(root)
-  const { r, a, scale = 1 } = make(rig, { color: opts.color, shade }, rnd)
+  const { r, c, a, scale = 1 } = make(rig, { color: opts.color, shade }, rnd)
   rig.scale.setScalar(size * scale)
   const joints = [r.body, r.head, r.tip, ...r.legs, ...r.knees, ...r.ears, ...r.extra]
   for (const j of [r.tail, r.jaw, ...(r.arms || []), ...(r.wings || [])]) if (j) joints.push(j)
@@ -568,6 +940,26 @@ export function buildAnimal(kind, opts = {}) {
     _headZ: r.head.position.z,
     _joints: joints,
     _muzzle: r.muzzle || null,
+    // crab claw fingers (rotation.x opens), null for the others
+    pincers: r.pincers || null,
+    // quad leg geometry for planted-foot poses (pounce, steal)
+    _legLen: c ? [c.shY, c.shY, c.hipY, c.hipY] : null,
+    _fdy: c ? c.shY - c.hipY : 0,
+    _fdz: c ? c.frontZ - c.backZ : 0,
+    _pk: 0,
+    _tuck: a.tuck ?? 0.3,
+    _pHead: a.pounceHead ?? 0.15,
+    _ram: a.ram ?? (a.charge ?? -0.4) - 0.35,
+    _ramTip: a.ramTip ?? -0.1,
+    _snapA: a.snap ?? 0.45,
+    _swimTuck: a.swimTuck ?? 0,
+    _swimHead: a.swimHead ?? 0.25,
+    _swimPitch: a.swimPitch ?? 0.05,
+    _climb: !!a.climb,
+    _waddle: !!a.waddle,
+    _post: a.post || null,
+    _seg: r.seg || null,
+    _pincers: r.pincers || null,
   }
   return root
 }
@@ -585,6 +977,61 @@ const sin = Math.sin
 const cos = Math.cos
 const pos = (v) => (v > 0 ? v : 0)
 const spike = (v, n) => Math.pow(v > 0 ? v : 0, n)
+const frac = (v) => v - Math.floor(v)
+const smooth = (v) => (v <= 0 ? 0 : v >= 1 ? 1 : v * v * (3 - 2 * v))
+const lerp = (a, b, k) => a + (b - a) * k
+
+// Fold quad leg i (Z-shape: thigh one way, shin the other) so its foot just reaches
+// the ground from a hip at height hy (rig units) with the body pitched p.
+// s = +1 thigh forward / shin back (hind), -1 the mirror (front). The shin tilts
+// only SHIN x the thigh angle so big paws / hooves stay nearly flat.
+const SHIN = 0.4
+function plant(u, i, hy, p, s) {
+  const q = hy / u._legLen[i]
+  let a = 0
+  if (q < 1) {
+    // Solve 0.5 cos(a) + 0.5 cos(SHIN a) = q (knee at mid-leg) with a few Newton steps.
+    a = Math.acos(q > -0.5 ? q : -0.5) * 1.2
+    for (let n = 0; n < 4; n++) {
+      const d = -0.5 * sin(a) - 0.5 * SHIN * sin(SHIN * a)
+      if (d > -1e-4) break
+      a -= (0.5 * cos(a) + 0.5 * cos(SHIN * a) - q) / d
+    }
+    a = a > 0 ? (a < 2.4 ? a : 2.4) : 0
+  }
+  u.legs[i].rotation.x = s * a - p
+  u.knees[i].rotation.x = -s * (1 + SHIN) * a
+}
+function plantAll(u, p) {
+  const hy = u.body.position.y
+  const fy = hy + u._fdy * cos(p) - u._fdz * sin(p) // shoulders after the pitch
+  plant(u, 0, fy, p, -1)
+  plant(u, 1, fy, p, -1)
+  plant(u, 2, hy, p, 1)
+  plant(u, 3, hy, p, 1)
+}
+
+// Pounce timeline. The pose runs on k = pouncePhase(t, speed) of the RAW t passed
+// to animateAnimal (no per-animal phase), so the caller can move the root in step:
+//   root = start + dir * dist * pounceTravel(k), root.y += jumpHeight * pounceArc(k).
+// k 0..0.4 crouch (+ rump wiggle), 0.4..0.5 launch, takeoff..land airborne,
+// 0.78..0.9 landing squash, 0.9..1 recover. Pass time-since-start to play one pounce.
+export const POUNCE = { period: 1.6, takeoff: 0.44, land: 0.78 }
+const PK0 = 0.4
+const PK1 = 0.5
+const PK3 = 0.9
+export function pouncePhase(t, speed = 1) {
+  return frac((t * speed) / POUNCE.period)
+}
+// 0..1 height factor of the leap (0 on the ground, 1 at the top).
+export function pounceArc(k) {
+  if (k <= POUNCE.takeoff || k >= POUNCE.land) return 0
+  return sin((Math.PI * (k - POUNCE.takeoff)) / (POUNCE.land - POUNCE.takeoff))
+}
+// 0..1 forward progress of the leap (0 before takeoff, 1 after landing).
+export function pounceTravel(k) {
+  return k <= POUNCE.takeoff ? 0 : k >= POUNCE.land ? 1 : (k - POUNCE.takeoff) / (POUNCE.land - POUNCE.takeoff)
+}
 
 function rest(u) {
   const j = u._joints
@@ -627,6 +1074,7 @@ function quadPose(u, T, mode, sp) {
   const neck = u.head
   const tip = u.headTip
   const h = u._restY // bob amplitudes scale with the animal's hip height
+  if ((mode === 'climb' || mode === 'steal') && !u._climb) mode = 'idle'
   switch (mode) {
     case 'graze': {
       const g = u._gz
@@ -644,11 +1092,12 @@ function quadPose(u, T, mode, sp) {
     }
     case 'walk':
     case 'run':
-    case 'charge': {
+    case 'charge':
+    case 'ram': {
       const run = mode !== 'walk'
       const type = run ? u._run : 'walk'
       const offs = GAITS[type]
-      const f = u._freq * sp * (mode === 'charge' ? 2.2 : run ? 1.9 : 1)
+      const f = u._freq * sp * (mode === 'charge' || mode === 'ram' ? 2.2 : run ? 1.9 : 1)
       const A = run ? 0.55 : 0.32
       const Kn = run ? 1.0 : 0.55
       const c = T * f
@@ -693,8 +1142,161 @@ function quadPose(u, T, mode, sp) {
           neck.rotation.x = u._charge + 0.05 * s2
           tip.rotation.x = 0.2
           if (u.jaw) u.jaw.rotation.x = -0.15
+        } else if (mode === 'ram') {
+          // Head low, horns / antlers / brow pointed forward, a butt jab each stride.
+          neck.rotation.x = u._ram + 0.08 * s2
+          neck.rotation.y = 0
+          tip.rotation.x = u._ramTip - 0.06 * pos(s1)
+          if (u.ears.length === 2) u.ears[0].rotation.x = u.ears[1].rotation.x = -0.5
+          if (u.tail) u.tail.rotation.x = -0.9 + 0.1 * s2
         }
       }
+      return
+    }
+    case 'pounce': {
+      const k = u._pk
+      const tk = u._tuck
+      // Airborne leg pose (world angle from vertical, + = forward) and knees.
+      const fa = lerp(1.25, 0.95, tk)
+      const fk = lerp(0, -2.1, tk)
+      const ha = lerp(-1.15, -0.85, tk)
+      const hk = lerp(0.1, 0.45, tk)
+      let p = 0
+      let drop = 0
+      let air = 0
+      let la = 0 // reach down for the landing
+      let ex = 0 // focus / excitement
+      if (k < PK0) {
+        const cr = smooth(k / PK0)
+        p = -0.07 * cr
+        drop = 0.26 * cr
+        ex = cr
+        body.rotation.y = 0.07 * cr * cr * sin(T * 15 * sp)
+      } else if (k < PK1) {
+        const e = smooth((k - PK0) / (PK1 - PK0))
+        p = lerp(-0.07, 0.3, e)
+        drop = lerp(0.26, -0.05, e)
+        air = e
+        ex = 1
+      } else if (k < POUNCE.land) {
+        const fl = (k - PK1) / (POUNCE.land - PK1)
+        p = lerp(0.3, -0.25, smooth(fl))
+        drop = -0.05
+        air = 1
+        la = smooth((fl - 0.45) / 0.55)
+        ex = 1
+      } else if (k < PK3) {
+        const l = (k - POUNCE.land) / (PK3 - POUNCE.land)
+        p = lerp(-0.25, 0, smooth(l))
+        drop = 0.16 * sin(Math.PI * l)
+        air = 1 - smooth(l / 0.5)
+        la = 1
+        ex = 1 - l
+      }
+      body.rotation.x = p
+      body.position.y -= drop * h
+      plantAll(u, p)
+      if (air > 0) {
+        const fA = lerp(fa, 0.45, la)
+        const fK = lerp(fk, 0, la)
+        const hA = lerp(ha, -0.3, la)
+        const hK = lerp(hk, -0.4, la)
+        for (let i = 0; i < 4; i++) {
+          const fr = i < 2
+          L[i].rotation.x = lerp(L[i].rotation.x, (fr ? fA : hA) - p, air)
+          K[i].rotation.x = lerp(K[i].rotation.x, fr ? fK : hK, air)
+        }
+      }
+      neck.rotation.x = -u._pHead * ex - 0.8 * p
+      tip.rotation.x = 0.12 * ex
+      if (u.jaw) u.jaw.rotation.x = -0.4 * air * (1 - 0.5 * la)
+      if (u.ears.length === 2) u.ears[0].rotation.x = u.ears[1].rotation.x = -0.4 * ex
+      if (u.tail) {
+        u.tail.rotation.x = -0.2 - 0.5 * air
+        swish(u, k < PK0 ? 0.3 * ex * sin(T * 10 * sp) : 0)
+      }
+      if (u._tail2) {
+        u._tail2.rotation.x = 0.3 * air
+        u._tail3.rotation.x = 0.3 * air
+      }
+      return
+    }
+    case 'snap': {
+      // Jaw creeps open, holds, then slams shut; the body twists after the bite.
+      const c = frac(T * 1.4 * sp)
+      const o = c < 0.45 ? smooth(c / 0.45) : c < 0.6 ? 1 : c < 0.66 ? 1 - (c - 0.6) / 0.06 : 0
+      const tw = c > 0.6 && c < 0.9 ? sin(((c - 0.6) / 0.3) * Math.PI) : 0
+      if (u.jaw) u.jaw.rotation.x = -u._snapA * o
+      tip.rotation.x = 0.22 * o
+      neck.rotation.x = 0.45 * u._snapA * o // lift the head so the open jaw clears the ground
+      neck.rotation.y = 0.3 * tw
+      body.rotation.y = 0.14 * tw
+      if (u.tail) swish(u, -0.3 * tw)
+      breathe(u, T, 0.02)
+      return
+    }
+    case 'swim': {
+      // Body level, legs paddling (swimTuck 1: legs swept back, little strokes).
+      const w = TAU * T * u._freq * sp * 1.1
+      const tk = u._swimTuck
+      for (let i = 0; i < 4; i++) {
+        const p = w + (i === 0 || i === 3 ? 0 : Math.PI)
+        const fr = i < 2
+        L[i].rotation.x = lerp(fr ? 0.35 + 0.75 * sin(p) : -0.25 + 0.55 * sin(p), (fr ? -0.7 : -1.1) + 0.3 * sin(p), tk)
+        K[i].rotation.x = -lerp(fr ? 0.9 : 0.6, 0.3, tk) * pos(cos(p))
+      }
+      body.position.y += 0.01 * h * sin(2 * w)
+      body.rotation.z = 0.04 * sin(w)
+      body.rotation.x = u._swimPitch
+      neck.rotation.x = u._swimHead - u._swimPitch + 0.04 * sin(2 * w)
+      if (u.tail) u.tail.rotation.x = -0.1
+      if (u.ears.length === 2) u.ears[0].rotation.x = u.ears[1].rotation.x = -0.3
+      return
+    }
+    case 'climb': {
+      // Upright on a vertical vine (belly to -Z), hands reaching up in turn, feet
+      // gripping. speed 0 = hanging still from both hands.
+      const w = TAU * T * 0.9 * sp
+      const p = 1.45
+      body.rotation.x = p
+      body.position.y += 0.08 * h * sin(2 * w)
+      for (let i = 0; i < 2; i++) {
+        const s = sp ? sin(w + i * Math.PI) : 0
+        L[i].rotation.x = Math.PI - p + 0.1 + 0.4 * s
+        K[i].rotation.x = -0.7 * pos(-s) - 0.15
+        const g = sp ? sin(w + i * Math.PI + Math.PI) : -0.6
+        L[i + 2].rotation.x = -p + 0.75 + 0.35 * g
+        K[i + 2].rotation.x = -1.1 - 0.4 * g
+      }
+      neck.rotation.x = -1.0 + 0.1 * sin(T * 0.7)
+      neck.rotation.y = 0.3 * sin(T * 0.5)
+      if (u.tail) u.tail.rotation.x = 0.3 + 0.15 * sin(w)
+      if (u._tail2) {
+        u._tail2.rotation.x = 0.2 * sin(w - 0.7)
+        u._tail3.rotation.x = 0.3 * sin(w - 1.4)
+      }
+      return
+    }
+    case 'steal': {
+      // Sit up, both hands shoot forward, grab, pull the loot back to the chest.
+      const c = frac(T * 0.8 * sp)
+      const r = c < 0.3 ? smooth(c / 0.3) : c < 0.45 ? 1 : 1 - smooth((c - 0.45) / 0.55)
+      const p = 0.85 - 0.25 * r
+      body.rotation.x = p
+      body.position.y -= 0.3 * h
+      plant(u, 2, body.position.y, p, 1)
+      plant(u, 3, body.position.y, p, 1)
+      const g = lerp(0.5, 1.55, r)
+      const e = lerp(1.9, 0, r)
+      for (let i = 0; i < 2; i++) {
+        L[i].rotation.x = g - p + 0.05 * i
+        K[i].rotation.x = e
+      }
+      neck.rotation.x = -0.8 * p + 0.15 * r
+      if (u.jaw) u.jaw.rotation.x = -0.2 * r
+      if (u.ears.length === 2) u.ears[0].rotation.x = u.ears[1].rotation.x = -0.2 * r
+      if (u.tail) u.tail.rotation.x = -0.4 * p
+      if (u._tail2) u._tail3.rotation.x = 0.3 * sin(T * 3)
       return
     }
     case 'rear': {
@@ -850,6 +1452,19 @@ function birdPose(u, T, mode, sp) {
   const body = u.body
   const neck = u.head
   const tip = u.headTip
+  if (mode === 'swim' && u._waddle) {
+    // Penguin: belly down, flippers stroking, feet trailing.
+    const w = T * 9 * sp
+    body.rotation.x = -1.35
+    const f = 0.25 + 0.7 * sin(w)
+    W[0].rotation.z = -f
+    W[1].rotation.z = f
+    L[0].rotation.x = -1.35 + 0.25 * sin(w * 0.5)
+    L[1].rotation.x = -1.35 - 0.25 * sin(w * 0.5)
+    neck.rotation.x = 1.15 + 0.05 * sin(w)
+    body.position.y += 0.02 * sin(w + 1)
+    return
+  }
   switch (mode) {
     case 'graze': {
       const pk = spike(sin(T * 4.2 * sp), 3)
@@ -876,6 +1491,19 @@ function birdPose(u, T, mode, sp) {
         body.rotation.x = -0.35
         neck.rotation.x = 0.2
         const f = 0.6 + 0.5 * sin(T * 24 * sp)
+        W[0].rotation.z = -f
+        W[1].rotation.z = f
+      }
+      if (u._waddle) {
+        // Penguin waddle: big side-to-side roll, flippers held out, no head bob.
+        neck.position.z = u._headZ
+        L[0].rotation.x = (run ? 0.45 : 0.3) * s
+        L[1].rotation.x = -(run ? 0.45 : 0.3) * s
+        body.rotation.z = (run ? 0.2 : 0.16) * s
+        body.rotation.x = run ? -0.12 : 0
+        neck.rotation.x = run ? 0.1 : 0
+        body.position.y += 0.012 * Math.abs(s)
+        const f = run ? 0.55 + 0.25 * sin(T * 16 * sp) : 0.4 + 0.06 * Math.abs(s)
         W[0].rotation.z = -f
         W[1].rotation.z = f
       }
@@ -910,17 +1538,119 @@ function birdPose(u, T, mode, sp) {
   }
 }
 
-// Pose `obj` (from buildAnimal) for time t (s). mode: idle | graze | walk | run |
-// charge | rear | wave | dizzy. speed scales the gait / motion frequency.
-// Allocation-free.
+// Crab: walk / run scuttle (legs lift in two alternating groups; the caller moves
+// the root sideways along its local X), steal (claws reach forward, pinch, pull
+// back), rear / wave (claws up), snap (pincers clack), dizzy, idle.
+function crabPose(u, T, mode, sp) {
+  const L = u.legs
+  const A = u.arms
+  const P = u._pincers
+  const body = u.body
+  let f = 0
+  let ax = 0.3 // claws raised
+  let ay = 0.5 // claws folded in
+  let pin = 0.12 // pincers open
+  switch (mode) {
+    case 'walk':
+      f = u._freq * sp
+      break
+    case 'run':
+    case 'charge':
+      f = u._freq * sp * 1.8
+      ax = 0.5
+      break
+    case 'steal': {
+      const c = frac(T * 0.8 * sp)
+      let k
+      if (c < 0.35) {
+        k = smooth(c / 0.35)
+        pin = 0.12 + 0.5 * k
+      } else if (c < 0.5) {
+        k = 1
+        pin = 0.62 * (1 - smooth((c - 0.35) / 0.15))
+      } else {
+        k = 1 - smooth((c - 0.5) / 0.5)
+        pin = 0
+      }
+      ay = 0.5 * (1 - k)
+      ax = 0.3 - 0.32 * k
+      body.rotation.x = -0.12 * k
+      break
+    }
+    case 'rear':
+    case 'wave': {
+      const w = T * 8 * sp
+      ax = 1.0 + 0.2 * sin(w)
+      ay = 0.15
+      A[0].rotation.z = -0.25 * sin(w)
+      A[1].rotation.z = -0.25 * sin(w)
+      pin = 0.35 + 0.3 * sin(w * 1.6)
+      body.rotation.x = 0.12
+      break
+    }
+    case 'snap':
+      ax = 0.45
+      ay = 0.3
+      pin = 0.65 * pos(sin(T * 11 * sp))
+      break
+    case 'dizzy':
+      body.rotation.z = 0.15 * sin(T * 3.3 * sp)
+      ax = 0.1
+      ay = 0.7
+      pin = 0.3
+      break
+    default:
+      pin = 0.12 + 0.45 * spike(sin(T * 0.9), 16) * pos(sin(T * 28))
+  }
+  for (let i = 0; i < 6; i++) {
+    const s = CRAB_SIDE[i]
+    if (f) {
+      const p = TAU * (T * f + CRAB_PH[i])
+      L[i].rotation.z = s * 0.38 * pos(sin(p))
+      L[i].rotation.y = 0.12 * cos(p)
+    } else L[i].rotation.z = s * 0.05 * spike(sin(T * 0.7 + i * 1.3), 8)
+  }
+  if (f) {
+    const c = TAU * T * f
+    body.position.y += 0.008 * Math.abs(sin(c))
+    body.rotation.z = 0.05 * sin(c)
+    ax += 0.08 * sin(c * 2)
+  }
+  for (let i = 0; i < 2; i++) {
+    A[i].rotation.x = ax
+    A[i].rotation.y = SIDES[i] * ay
+    P[i].rotation.x = pin
+  }
+  u.ears[0].rotation.z = 0.12 * sin(T * 1.3)
+  u.ears[1].rotation.z = -0.12 * sin(T * 1.1 + 1)
+  breathe(u, T, 0.01)
+}
+
+// Pose `obj` (from buildAnimal) for time t (s). speed scales the gait / motion
+// frequency. Allocation-free; unknown modes (or a mode a kind cannot do) = idle.
+// mode:
+//  idle | graze | walk | run | charge | rear | wave | dizzy (every kind)
+//  ram    quads: gallop with the head low and horns / antlers forward (bull,
+//         longhorn, goat, moose...)
+//  pounce quads: crouch -> leap -> land on the raw-t timeline of pouncePhase();
+//         the root is not moved, the caller moves it (pounceTravel / pounceArc)
+//  snap   quads: jaw creeps open then slams shut + body twist (alligator!)
+//  swim   quads: body level, legs paddling (alligator, bears...); penguin swims
+//  climb  monkey: upright on a vertical vine, hands alternate up (speed 0 = hang)
+//  steal  monkey: sit up, grab forward, pull back; crab: claws reach and pinch
+// Penguin walk / run = waddle; crab walk / run = sideways scuttle.
 export function animateAnimal(obj, t, mode = 'idle', speed = 1) {
   const u = obj.userData
   if (!u || !u._joints) return
   const T = t + u.phase
   rest(u)
-  if (u._family === 'quad') quadPose(u, T, mode, speed)
-  else if (u._family === 'biped') humanPose(u, T, mode, speed)
+  if (u._family === 'quad') {
+    if (mode === 'pounce') u._pk = pouncePhase(t, speed)
+    quadPose(u, T, mode, speed)
+  } else if (u._family === 'biped') humanPose(u, T, mode, speed)
+  else if (u._family === 'crab') crabPose(u, T, mode, speed)
   else birdPose(u, T, mode, speed)
+  if (u._post) u._post(u, T, mode, speed)
 }
 
 // --- Flyers & fish ---------------------------------------------------------------
@@ -963,17 +1693,108 @@ export function buildBird(color = '#3a3a48') {
 export function buildBat() {
   return flyer(mat('#2a2230', 0.9), mat('#3d2f3f', 0.95), null, true)
 }
-// Flap a bird or bat. flap 0 = glide, 1 = full flapping.
-export function animateBird(obj, t, flap = 1) {
+// Big flyers (eagle, seagull) in the same style, built at eagle size and scaled by S.
+// Adds userData.feet [L, R] (pivots at the hips; rotation.x + = feet forward) and
+// userData.grab (a Group on the body that animateBird keeps between the talons:
+// attach a carried / stolen object to it).
+function bigFlyer(kind, S, C) {
+  const root = new Group()
+  const body = grp(root)
+  const B = (p, m, x, y, z, w, h, d, rx = 0, ry = 0, rz = 0, sh = false) => bx(p, m, x * S, y * S, z * S, w * S, h * S, d * S, rx, ry, rz, sh)
+  const J = (p, x, y, z) => grp(p, x * S, y * S, z * S)
+  const eyes = []
+  const wings = []
+  const tips = []
+  const feet = []
+  B(body, C.body, 0, 0, 0, 0.26, 0.24, 0.56, 0, 0, 0, true)
+  B(body, C.head, 0, 0.04, -0.32, 0.18, 0.18, 0.14)
+  B(body, C.head, 0, 0.07, -0.43, 0.17, 0.16, 0.18, 0, 0, 0, true)
+  B(body, C.beak, 0, 0.06, -0.56, 0.08, 0.08, 0.1)
+  if (C.hook) B(body, C.beak, 0, 0.03, -0.615, 0.05, 0.08, 0.035, -0.35) // hooked tip
+  else B(body, C.spot, 0, 0.035, -0.585, 0.05, 0.03, 0.03) // gull's red spot
+  for (const s of SIDES) eyes.push(B(body, EYE, s * 0.086, 0.09, -0.46, 0.012, 0.03, 0.04))
+  B(body, C.tail, 0, 0.01, 0.4, 0.3, 0.03, 0.28, 0, 0, 0, true)
+  for (const s of SIDES) {
+    const w = J(body, s * 0.13, 0.04, -0.06)
+    B(w, C.wing, s * 0.37, 0.04, -0.02, 0.48, 0.04, 0.38, 0, 0, 0, true)
+    B(w, C.covert, s * 0.37, 0.065, -0.14, 0.46, 0.015, 0.12)
+    const t = J(w, s * 0.6, 0.04, -0.04)
+    B(t, C.wing, s * 0.82, 0.04, 0.0, 0.44, 0.035, 0.3, 0, 0, 0, true)
+    B(t, C.tipM, s * 1.06, 0.04, -0.08, 0.16, 0.025, 0.06, 0, -s * 0.15, 0)
+    B(t, C.tipM, s * 1.05, 0.04, 0.06, 0.16, 0.025, 0.06, 0, -s * 0.3, 0)
+    wings.push(w)
+    tips.push(t)
+    const f = J(body, s * 0.07, -0.1, 0.06)
+    B(f, C.thigh, s * 0.07, -0.15, 0.06, 0.08, 0.12, 0.09)
+    B(f, C.leg, s * 0.07, -0.25, 0.06, 0.035, 0.12, 0.035)
+    B(f, C.leg, s * 0.07, -0.31, 0.04, 0.08, 0.025, 0.09)
+    B(f, C.talon, s * 0.07, -0.325, -0.005, 0.085, 0.03, 0.025, 0.5)
+    f.rotation.x = -1.35
+    feet.push(f)
+  }
+  const grab = J(body, 0, -0.33, 0.06)
+  root.userData = {
+    kind, body, wings, wingTips: tips, feet, grab, eyes,
+    phase: nextSeed() % 50,
+    _flapRate: S > 0.75 ? 6 : 9.5,
+    _footY: -0.1 * S,
+    _footZ: 0.06 * S,
+    _footL: 0.23 * S,
+  }
+  animateBird(root, 0, 0)
+  return root
+}
+// Eagle: ~2.2 m wingspan, ~0.85 m beak to tail, white head and tail, hooked beak, talons.
+export function buildEagle() {
+  const brown = mat('#4a2e1c')
+  const white = mat('#f6f4ee')
+  const yellow = mat('#f2b632', 0.5)
+  return bigFlyer('eagle', 1, {
+    body: brown, head: white, beak: yellow, wing: mat('#3e2616'), covert: mat('#6a4a30'), tipM: mat('#24160e'),
+    tail: white, thigh: brown, leg: yellow, talon: mat('#1a1614', 0.4), hook: true,
+  })
+}
+// Seagull: ~1.1 m wingspan, white with grey wings, black wingtips, yellow beak + red spot.
+export function buildSeagull() {
+  const white = mat('#f4f6f8')
+  const feet = mat('#ec9a6a', 0.6)
+  return bigFlyer('seagull', 0.5, {
+    body: white, head: white, beak: mat('#f2c230', 0.5), spot: mat('#d8262b', 0.5), wing: mat('#a4adb6'), covert: mat('#c4ccd4'),
+    tipM: mat('#1c1c22'), tail: white, thigh: white, leg: feet, talon: feet, hook: false,
+  })
+}
+
+// Flap a bird, bat, eagle or seagull. flap 0 = glide, 1 = full flapping.
+// dive 0..1 (optional): 0..0.6 tucks the wings back into a nose-down stoop, then
+// 0.55..1 flares (nose up, wings up) and swings the feet forward for a talon strike.
+// With dive 0 a bird / bat is posed exactly as before.
+export function animateBird(obj, t, flap = 1, dive = 0) {
   const u = obj.userData
   const T = (t + u.phase) * u._flapRate
-  const a = 0.15 * (1 - flap) * sin(T * 0.15) + flap * 0.85 * sin(T)
-  const b = flap * 0.5 * sin(T - 0.9)
+  const d = dive > 0 ? (dive < 1 ? dive : 1) : 0
+  const fl = d > 0 ? flap * (1 - 0.85 * d) : flap
+  const st = d > 0.55 ? smooth((d - 0.55) / 0.45) : 0
+  const a = 0.15 * (1 - fl) * sin(T * 0.15) + fl * 0.85 * sin(T) + 0.5 * st
+  const b = fl * 0.5 * sin(T - 0.9)
   u.wings[0].rotation.z = -a
   u.wings[1].rotation.z = a
   u.wingTips[0].rotation.z = -b
   u.wingTips[1].rotation.z = b
-  u.body.position.y = -0.02 * flap * sin(T + 0.6)
+  u.body.position.y = -0.02 * fl * sin(T + 0.6)
+  if (u.feet || d > 0 || u._dv) {
+    const tuck = (d < 0.6 ? d / 0.6 : 1) * (1 - 0.5 * st)
+    u.wings[0].rotation.y = tuck
+    u.wings[1].rotation.y = -tuck
+    u.wingTips[0].rotation.y = 0.6 * tuck
+    u.wingTips[1].rotation.y = -0.6 * tuck
+    u.body.rotation.x = -0.5 * tuck * (1 - st) + 0.45 * st
+    if (u.feet) {
+      const th = -1.35 + 2.25 * st
+      u.feet[0].rotation.x = u.feet[1].rotation.x = th
+      u.grab.position.set(0, u._footY - u._footL * cos(th), u._footZ - u._footL * sin(th))
+    }
+    u._dv = d > 0
+  }
 }
 
 // Fish ~0.6 m long, facing -Z; userData.tail swings.

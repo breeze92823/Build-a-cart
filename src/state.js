@@ -4,7 +4,7 @@
 // The run cash formula, Cart Upgrades, Shop stock, rebirth, quests and save slots
 // all live here; config.js holds their numbers.
 import {
-  BUNDLES, CARRY, DEFAULT_GEAR, LEAN, DICE, ECONOMY, GEAR, INSTANT_MARKUP, PASSES, QUEST_LEVELS, QUESTS, REBIRTH, RESTOCK, SAVE_SLOTS, UPGRADE_BULK, UPGRADES, WHEEL,
+  BUNDLES, CARRY, DEFAULT_GEAR, LEAN, TRACK, DICE, ECONOMY, GEAR, INSTANT_MARKUP, PASSES, QUEST_LEVELS, QUESTS, REBIRTH, RESTOCK, SAVE_SLOTS, UPGRADE_BULK, UPGRADES, WHEEL,
 } from './config.js'
 import { cartStats } from './cartPhysics.js'
 import { mulberry32 } from './textures.js'
@@ -192,9 +192,11 @@ export const equippedGear = () => ({
   wheels: gearById[state.equipped.wheels],
   booster: gearById[state.equipped.booster],
 })
+// The Golden Gate (halfway) opens for players with TRACK.gate.reb rebirths.
+export const gateOpen = () => state.rebirths >= TRACK.gate.reb
 // rain: a Thunderstorm makes the rails slippery in the bends (LEAN.rainGrip).
 export function currentStats(eventSpeed = 1, rain = false) {
-  const mods = { fuelSaver: hasPass('fuel'), fuelBonus: state.fuelNextRun ? 1.5 : 1, speed: eventSpeed, grip: rain ? LEAN.rainGrip : 1 }
+  const mods = { fuelSaver: hasPass('fuel'), fuelBonus: state.fuelNextRun ? 1.5 : 1, speed: eventSpeed, grip: rain ? LEAN.rainGrip : 1, gateShut: !gateOpen() }
   for (const u of UPGRADES) if (u.kind === 'cart') mods[u.stat] = upgradeValue(u.id)
   return cartStats(equippedGear(), state.wagons + state.goldenCarts, mods)
 }

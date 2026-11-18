@@ -239,6 +239,9 @@ const AMB = {
   sand: { cols: ['#f0cf8a', '#e0b26a', '#fff0c8'].map(C) },
   snow: { cols: ['#ffffff', '#eaf4ff', '#dbe9ff'].map(C) },
   fireflies: { cols: ['#d8ff6a', '#fff27a', '#a8ff7a'].map(C) },
+  dust: { cols: ['#c9b79a', '#b8a888', '#ded0b4'].map(C) },
+  ash: { cols: ['#3a3434', '#5a5250', '#2a2626'].map(C) },
+  embers: { cols: ['#ffb04a', '#ff6a1a', '#ffd27a'].map(C) },
 }
 // Cached colours for the route's emitters (no allocation per particle).
 const COLS = new Map()
@@ -384,6 +387,7 @@ export function createFx(scene, quality = 1) {
     },
     // One mote of an area's air (AMB) at p.
     ambient(p, kind) {
+      if (!AMB[kind]) return
       const c = pick(AMB[kind].cols)
       if (kind === 'pollen') sparks.add({ x: p.x, y: p.y, z: p.z, vx: rnd(-0.3, 0.3), vy: rnd(-0.1, 0.3), vz: rnd(-0.3, 0.3), size: rnd(0.07, 0.13), life: rnd(1.8, 2.8), color: c, alpha: 0.5, fadeIn: 0.2 })
       else if (kind === 'leaves') confetti.add({ x: p.x, y: p.y, z: p.z, vx: rnd(1, 3), vy: rnd(-0.5, 0.5), vz: rnd(-0.5, 0.5), size: rnd(0.22, 0.36), life: rnd(2.2, 3.2), color: c, alpha: 1, gravity: 0.8, drag: 0.4, spin: rnd(-5, 5), fadeIn: 0.1 })
@@ -391,6 +395,9 @@ export function createFx(scene, quality = 1) {
       else if (kind === 'mist') smoke.add({ x: p.x, y: p.y, z: p.z, vx: rnd(-1, 1), vy: rnd(-0.5, 1.5), vz: rnd(0, 2), size: rnd(2, 3.6), grow: 1.8, life: rnd(1.6, 2.4), color: c, alpha: 0.24, drag: 0.4, fadeIn: 0.25 })
       else if (kind === 'sparkle') sparks.add({ x: p.x, y: p.y, z: p.z, vx: 0, vy: rnd(-0.2, 0.2), vz: 0, size: rnd(0.05, 0.09), life: rnd(0.9, 1.5), color: c, alpha: 0.6, spin: rnd(-3, 3), fadeIn: 0.3 })
       else if (kind === 'snow') confetti.add({ x: p.x, y: p.y + 3, z: p.z, vx: rnd(-0.6, 0.6), vy: rnd(-1.6, -0.8), vz: rnd(-0.6, 0.6), size: rnd(0.1, 0.2), life: rnd(2.2, 3.4), color: c, alpha: 0.95, gravity: 0, drag: 0.2, spin: rnd(-3, 3), fadeIn: 0.15 })
+      else if (kind === 'dust') smoke.add({ x: p.x, y: p.y - 1, z: p.z, vx: rnd(-0.6, 0.6), vy: rnd(-0.1, 0.3), vz: rnd(-0.6, 0.6), size: rnd(0.3, 0.6), grow: 2, life: rnd(1.2, 2), color: c, alpha: 0.22, drag: 0.4, fadeIn: 0.25 })
+      else if (kind === 'ash') confetti.add({ x: p.x, y: p.y + 3, z: p.z, vx: rnd(-0.8, 0.8), vy: rnd(-1.4, -0.6), vz: rnd(-0.8, 0.8), size: rnd(0.08, 0.16), life: rnd(2, 3), color: c, alpha: 0.9, gravity: 0, drag: 0.3, spin: rnd(-4, 4), fadeIn: 0.15 })
+      else if (kind === 'embers') sparks.add({ x: p.x, y: p.y - 1, z: p.z, vx: rnd(-0.4, 0.4), vy: rnd(0.8, 2), vz: rnd(-0.4, 0.4), size: rnd(0.08, 0.16), life: rnd(1, 1.8), color: c, alpha: 0.9, fadeIn: 0.1 })
       else if (kind === 'fireflies') sparks.add({ x: p.x, y: p.y, z: p.z, vx: rnd(-0.5, 0.5), vy: rnd(-0.2, 0.4), vz: rnd(-0.5, 0.5), size: rnd(0.12, 0.2), life: rnd(1.6, 2.6), color: c, alpha: 0.9, fadeIn: 0.4 })
       else if (kind === 'sand') smoke.add({ x: p.x, y: p.y - 1, z: p.z, vx: rnd(3, 7), vy: rnd(-0.2, 0.4), vz: rnd(-1, 1), size: rnd(0.3, 0.6), grow: 2.5, life: rnd(1.2, 1.8), color: c, alpha: 0.32, drag: 0.3, fadeIn: 0.2 })
     },

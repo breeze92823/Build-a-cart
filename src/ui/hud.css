@@ -843,3 +843,50 @@ body.is-riding .touch-cluster, body.is-riding .joy-base, body.is-riding .touch-l
 .lean-btn.held { filter: brightness(1.25); transform: scale(0.94); }
 .touch-ui .riding .boost-btn { bottom: calc(var(--safe-b) + var(--u) * 19.5); }
 .crashed .lean-meter, .crashed .bend-sign, .crashed .hz-alert, .crashed .junction, .crashed .bonus-pop { display: none !important; }
+
+/* --- Act 2: brake heat, side attacks, action prompts ------------------------------------------- */
+.heat-bar {
+  position: absolute;
+  bottom: calc(var(--safe-b) + var(--u) * 10.4);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(var(--u) * 13), 34vw);
+  height: calc(var(--u) * 1.3);
+  background: #111;
+  border: calc(var(--u) * 0.16) solid #000;
+  overflow: hidden;
+  display: none;
+  pointer-events: none;
+}
+.heat-bar.on { display: block; }
+.heat-bar .fill { position: absolute; inset: 0; transform-origin: left; background: linear-gradient(90deg, #ffd27a, #ff6a1a 70%, #ff2a1a); }
+.heat-bar span { position: absolute; inset: 0; display: grid; place-items: center; font-size: calc(var(--u) * 0.85); font-weight: 700; color: #fff; }
+.heat-bar.hot { box-shadow: 0 0 calc(var(--u) * 0.8) #ff5a1a; }
+.heat-bar.faded { animation: blink 0.25s steps(2) infinite; }
+.attack-arrow {
+  position: absolute;
+  top: 46%;
+  font-size: min(calc(var(--u) * 5), 12vw);
+  font-weight: 700;
+  color: #ff4a3a;
+  display: none;
+  pointer-events: none;
+}
+.attack-arrow.left { left: max(4vw, calc(var(--safe-l) + var(--u) * 1)); }
+.attack-arrow.right { right: max(4vw, calc(var(--safe-r) + var(--u) * 1)); }
+.attack-arrow.on { display: block; animation: pulse 0.2s infinite alternate; }
+.act-prompt {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  display: none;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.act-prompt.on { display: block; }
+.act-prompt b { display: block; font-size: min(calc(var(--u) * 2.6), 6.4vw); font-weight: 700; color: #ffe066; animation: pulse 0.3s infinite alternate; }
+.act-prompt .bar { position: relative; margin: calc(var(--u) * 0.4) auto 0; width: min(calc(var(--u) * 16), 50vw); height: calc(var(--u) * 1.2); background: #111; border: calc(var(--u) * 0.16) solid #000; overflow: hidden; }
+.act-prompt .fill { position: absolute; inset: 0; transform-origin: left; background: linear-gradient(90deg, #5dff6a, #1fa81c); }
+.crashed .heat-bar, .crashed .attack-arrow, .crashed .act-prompt { display: none !important; }

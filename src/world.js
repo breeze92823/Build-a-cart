@@ -35,6 +35,11 @@ const DIRT = '#9a6337'
 const DIRT_DARK = '#7a4a28'
 const DIRT_LIGHT = '#b37845'
 
+const GATE_HALF = 11 // half width of the Golden Gate's cut through the far wall
+const GATE_ROOF = 15 // the tunnel's ceiling height
+// The lands past the Golden Gate (Act 2): one big grass floor under the 2D path
+// (route2.js lays each area's own ground over it).
+export const ACT2 = { x0: -930, x1: 330, z0: V.front - 40, z1: -5720 }
 function ground(root) {
   const W = V.halfWidth * 2 + 80
   const grass = studMat(V.grass, { rough: 0.9 })
@@ -46,6 +51,15 @@ function ground(root) {
   far.position.set(0, 0, (Z_FAR + V.front) / 2)
   near.receiveShadow = far.receiveShadow = true
   root.add(near, far)
+  {
+    const w = ACT2.x1 - ACT2.x0
+    const d = ACT2.z0 - ACT2.z1
+    const act2 = new Mesh(studPlane(w, d), grass)
+    act2.position.set((ACT2.x0 + ACT2.x1) / 2, 0, (ACT2.z0 + ACT2.z1) / 2)
+    act2.receiveShadow = true
+    root.add(act2)
+    fixedV(RAPIER.ColliderDesc.cuboid(w / 2, 1, d / 2), { x: act2.position.x, y: -1, z: act2.position.z }, null, { friction: 0.9 })
+  }
   fixedV(RAPIER.ColliderDesc.cuboid(W / 2, 1, nearDepth / 2), { x: 0, y: -1, z: near.position.z }, null, { friction: 0.9 })
   fixedV(RAPIER.ColliderDesc.cuboid(W / 2, 1, farDepth / 2), { x: 0, y: -1, z: far.position.z }, null, { friction: 0.9 })
 
@@ -190,12 +204,21 @@ function cliffs(root) {
     for (let x = -V.halfWidth - 40; x < V.halfWidth + 40; ) {
       const w = 20 + rand() * 24
       const h = hMin + rand() * (hMax - hMin)
+      // The far wall has the Golden Gate cut through it at x = 0 (route2.js builds the gate).
+      if (zEdge === V.front && x < GATE_HALF && x + w > -GATE_HALF) {
+        if (-GATE_HALF - x > 1) segment(x, -GATE_HALF, zEdge, zEdge + dir * 40, h)
+        if (x + w - GATE_HALF > 1) segment(GATE_HALF, x + w, zEdge, zEdge + dir * 40, h)
+        x += w
+        continue
+      }
       segment(x, x + w, zEdge, zEdge + dir * 40, h)
       drips(x + w / 2, zEdge, h, false, w, -dir)
       if (rand() < 0.6) tree(g, x + w / 2, h + 1, zEdge + dir * (8 + rand() * 20), 1.2, rand)
       x += w
     }
   }
+  // The roof over the Golden Gate's tunnel through the far wall.
+  pillar(g, GATE_HALF * 2 + 2, hMax - GATE_ROOF, 40, 0, GATE_ROOF, V.front - 20, V.cliff)
   // Trees in the valley, lining the sides and around the far end.
   for (let i = 0; i < 180; i++) {
     const side = rand() < 0.5 ? -1 : 1

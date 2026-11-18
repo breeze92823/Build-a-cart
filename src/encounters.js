@@ -6,8 +6,9 @@
 // ride.js calls beforeStep / afterStep around every physics step and update()
 // every frame; this module owns the moving models (scenery is route.js).
 import { Group, InstancedMesh, Object3D, Vector3 } from 'three'
-import { BASES, BEAR, CART, HAZARDS, LEAN, PICKUPS, TRACK, WIND } from './config.js'
-import { bendAt, LAND_Y, LIP_Y, safeSpeed, trackHeight, trackX, trackXSlope, VALLEY_Y } from './cartPhysics.js'
+import { BASES, BEAR, CART, HAZARDS, LEAN, PICKUPS, TRACK, WIND, WINDS } from './config.js'
+import { bendAt, CORNERS, LAND_Y, LIP_Y, safeSpeed, trackHeight, trackX, trackXSlope, VALLEY_Y } from './cartPhysics.js'
+import { createEncounters2 } from './encounters2.js'
 import { branchX, RAIL_TOP } from './track.js'
 import { zAt } from './world.js'
 import { addCash, bonusCash } from './state.js'
@@ -96,6 +97,7 @@ export function createEncounters(scene, deps) {
   const root = new Group()
   scene.add(root)
   const rand = mulberry32(4242)
+  const enc2 = createEncounters2(root, deps)
   const tmp = new Vector3()
 
   // --- Pickups --------------------------------------------------------------------------------
@@ -240,6 +242,7 @@ export function createEncounters(scene, deps) {
 
   function reset(c, ev = 1) {
     eventCash = ev
+    enc2.reset(c, ev)
     next = 0
     while (next < items.length && items[next].s < c.s) next++
     coins = combo = 0
@@ -289,6 +292,7 @@ export function createEncounters(scene, deps) {
   }
   // After a revive at s: hazards ahead re-arm, the item pointer jumps.
   function revive(s) {
+    enc2.revive(s)
     for (const h of hz) if (h.at > s) resetHazard(h)
     if (s < BEAR.s1) resetBear()
     next = 0
@@ -306,25 +310,28 @@ export function createEncounters(scene, deps) {
   // input: the ride's { throttle, brake, lean }; returns it with `side` set.
   function beforeStep(c, input, dt) {
     input.side = 0
-    // Wind gusts on the Sky Trestle.
-    if (!c.air && c.s > WIND.s0 && c.s < WIND.s1) {
+    // Wind gusts (the Sky Trestle, the jungle rope bridge's sway, the ridge, the peak).
+    const W = WINDS.find((w) => c.s > w.s0 && c.s < w.s1)
+    if (!c.air && W) {
       wind.t -= dt
       if (wind.phase === 'calm' && wind.t <= 0) {
         wind.phase = 'warn'
-        wind.t = WIND.warn
+        wind.t = W.warn
         wind.dir = Math.random() < 0.5 ? -1 : 1
-        sfx.windGust(0.6)
+        if (W.kind === 'sway') sfx.ropeCreak(0.8)
+        else sfx.windGust(0.6)
       } else if (wind.phase === 'warn' && wind.t <= 0) {
         wind.phase = 'gust'
-        wind.t = WIND.gust
-        sfx.windGust(1)
+        wind.t = W.gust
+        if (W.kind === 'sway') sfx.ropeCreak(1)
+        else sfx.windGust(1)
       } else if (wind.phase === 'gust') {
-        const u = 1 - wind.t / WIND.gust
-        wind.side = wind.dir * WIND.push * Math.sin(Math.PI * clamp(u, 0, 1))
+        const u = 1 - wind.t / W.gust
+        wind.side = wind.dir * W.push * Math.sin(Math.PI * clamp(u, 0, 1))
         if (wind.t <= 0) {
           wind.phase = 'calm'
           wind.side = 0
-          wind.t = WIND.every[0] + Math.random() * (WIND.every[1] - WIND.every[0])
+          wind.t = W.every[0] + Math.random() * (W.every[1] - W.every[0])
         }
       }
       input.side = wind.side
@@ -344,7 +351,7 @@ export function createEncounters(scene, deps) {
     // A hazard blocking the way holds the cart at its line.
     c.held = false
     for (const h of hz) if (h.blocked && !h.soft && c.s > h.at - 40 && c.s < h.at) c.held = true
-    return input
+    return enc2.beforeStep(c, input, dt)
   }
 
   // --- After each physics step: pickups, collisions, bonuses ----------------------------------
@@ -431,7 +438,7 @@ export function createEncounters(scene, deps) {
     if (bi !== bendI) {
       if (bendRec && !c.crashed) judgeBend(bendRec)
       bendI = bi
-      bendRec = bi >= 0 ? { i: bi, maxTip: 0, tipT: 0, vSum: 0, n: 0, vSafe: bendSafe(bi, st.grip) } : null
+      bendRec = bi >= 0 && !CORNERS[bi].deg ? { i: bi, maxTip: 0, tipT: 0, vSum: 0, n: 0, vSafe: bendSafe(bi, st.grip) } : null
     }
     if (bendRec && !c.air) {
       const a = Math.abs(c.tip)
@@ -459,11 +466,11 @@ export function createEncounters(scene, deps) {
       if (r) crash = r
     }
     bearStep(c, v, dt)
-    return crash
+    return enc2.afterStep(c, st, prevS, dt) ?? crash
   }
 
   function bendSafe(i, grip) {
-    const [s0, s1] = T.bends[i]
+    const { s0, s1 } = CORNERS[i]
     let m = Infinity
     for (let s = s0 + 1; s < s1; s += 3) m = Math.min(m, safeSpeed(s, grip))
     return m
@@ -644,6 +651,7 @@ export function createEncounters(scene, deps) {
 
   // --- Per frame: models, signals, HUD -------------------------------------------------------------
   function update(dt, t, c, riding) {
+    enc2.update(dt, t, c, riding)
     comboT -= dt
     goT -= dt
     const s = c ? c.s : 0
@@ -790,7 +798,8 @@ export function createEncounters(scene, deps) {
         else if (h.kind === 'herd' && h.t < h.win[0]) ((text = h.id === 'sheep' ? 'SHEEP AHEAD - SLOW DOWN' : 'ANIMALS AHEAD - SLOW DOWN'), (kind = 'info'))
       }
       if (!text && goT > 0) ((text = 'GO!'), (kind = 'go'))
-      if (!text && c.s > T.station - 40 && c.s < T.goldLine + 6 && !c.arrived) ((text = 'BRAKE ON THE GOLD LINE!'), (kind = 'info'))
+      if (!text && enc2.alert) ((text = enc2.alert), (kind = enc2.alert.startsWith('STOP') || enc2.alert.startsWith('AVALANCHE') ? 'stop' : 'info'))
+      if (!text && c.s > T.terminus - 40 && c.s < T.goldLine + 6 && !c.arrived) ((text = 'BRAKE ON THE GOLD LINE!'), (kind = 'info'))
       if (text !== alertText || kind !== alertKind) {
         alertText = text
         alertKind = kind
@@ -816,8 +825,11 @@ export function createEncounters(scene, deps) {
     pickLane(dir) {
       if (!laneDecided) laneSel = dir
     },
-    // Golden Station: the cart stopped at s.
+    // The Glacier Gap cleared (ride.js, on landing past it).
+    glacierCleared: (pos) => enc2.glacier(pos),
+    // The Diamond Terminus: the cart stopped at s.
     arrived(s) {
+      enc2.terminus()
       const off = Math.abs(s - T.goldLine)
       if (off <= PICKUPS.stopWindow) {
         sfx.perfectStop()

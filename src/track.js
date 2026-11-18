@@ -21,7 +21,7 @@ import {
   SpriteMaterial,
 } from 'three'
 import { BASES, BUNDLES, GEAR, TRACK } from './config.js'
-import { FLOOR_Y, LAND_Y, LIP_Y, VALLEY_Y, laneX, laneXSlope, mergeK, trackHeight, trackSlope, trackX, trackXSlope } from './cartPhysics.js'
+import { FLOOR_Y, GAPS, LAND_Y, LIP_Y, PATH_JOIN, VALLEY_Y, hasRail, laneX, laneXSlope, mergeK, pathX, pathYaw, pathZ, trackHeight, trackSlope, trackX, trackXSlope } from './cartPhysics.js'
 import { RAPIER, addFixed } from './physics.js'
 import { block, group, mixHex, pillar } from './build.js'
 import { bake } from './bake.js'
@@ -77,9 +77,22 @@ function railPieces() {
     add(a, b, ha === hb ? 1 : Math.ceil((b - a) / 2.5))
   }
   add(H[H.length - 1][0], T.length + 1.5, 1)
-  // Bends: straight pieces would show kinks, so split those spans finely too.
+  // Bends and the 2D path: straight pieces would show kinks, so split those spans finely
+  // too; and no rails across a gap (the canyon's are not in the list; the glacier's are cut).
   const out = []
-  for (const [a, b] of spans) {
+  for (const [a0, b0] of spans) {
+    let a = a0
+    let b = b0
+    const gl = GAPS.find((g) => b > g.lip && a < g.end && g.name !== 'canyon')
+    if (gl) {
+      if (a < gl.lip) out.push(...fine(a, gl.lip))
+      if (b > gl.end) out.push(...fine(gl.end, b))
+      continue
+    }
+    if (b > PATH_JOIN) {
+      out.push(...fine(a, b))
+      continue
+    }
     if (!inBend(a, b) || b - a <= 3) {
       out.push([a, b])
       continue
@@ -89,17 +102,27 @@ function railPieces() {
   }
   return out
 }
+// [a, b] split into pieces of at most 2.5 m.
+function fine(a, b) {
+  const n = Math.max(1, Math.ceil((b - a) / 2.5))
+  const out = []
+  for (let i = 0; i < n; i++) out.push([a + ((b - a) * i) / n, a + ((b - a) * (i + 1)) / n])
+  return out
+}
 // A rail span [a, b] laid on the track starting at x (+ extra sideways offset fn), as a matrix.
+// Follows the line (pathX / pathZ: the valley bends, then the 2D path past the join).
 function railMatrix(e, x, a, b, side, extra) {
   const ya = trackHeight(a)
   const yb = trackHeight(b)
-  const xa = x + trackX(a) + extra(a)
-  const xb = x + trackX(b) + extra(b)
-  const flat = Math.hypot(b - a, xb - xa)
-  const yaw = -Math.atan2(xb - xa, b - a)
+  const xa = x + pathX(a) + extra(a)
+  const xb = x + pathX(b) + extra(b)
+  const za = pathZ(a)
+  const zb = pathZ(b)
+  const flat = Math.hypot(zb - za, xb - xa)
+  const yaw = Math.atan2(-(xb - xa), -(zb - za))
   const len = Math.hypot(flat, yb - ya)
   const off = side * (T.gauge / 2)
-  e.position.set((xa + xb) / 2 + off * Math.cos(yaw), (ya + yb) / 2 + SLEEPER_H + 0.09, zAt((a + b) / 2) - off * Math.sin(yaw))
+  e.position.set((xa + xb) / 2 + off * Math.cos(yaw), (ya + yb) / 2 + SLEEPER_H + 0.09, (za + zb) / 2 - off * Math.sin(yaw))
   e.rotation.set(Math.atan2(yb - ya, flat), yaw, 0, 'YXZ')
   e.scale.set(0.14, 0.18, len + 0.02)
   e.updateMatrix()
@@ -141,7 +164,7 @@ function railsAndSleepers(root, xs, homeX) {
   const rails = new InstancedMesh(new BoxGeometry(1, 1, 1), railMat, spans.length * 2 + 4 + sideRails + branchSpans.length * 2)
   const sleeperMat = new MeshStandardMaterial({ color: '#7a4a28', roughness: 0.9 })
   const sleeperS = []
-  for (let s = T.backS + 0.5; s <= T.length + 1; s += T.sleeperGap) if (s <= T.lipS - 0.4 || s >= T.gapEnd + 0.4) sleeperS.push(s)
+  for (let s = T.backS + 0.5; s <= T.length + 1; s += T.sleeperGap) if (hasRail(s - 0.4) && hasRail(s + 0.4)) sleeperS.push(s)
   const sleepers = new InstancedMesh(new BoxGeometry(2.5, SLEEPER_H, 0.5), sleeperMat, sleeperS.length + 6 + sideSleepers + branchSleepers.length)
   const e = new Object3D()
   let r = 0
@@ -181,8 +204,8 @@ function railsAndSleepers(root, xs, homeX) {
     }
     for (const s of sleeperS) {
       if (gap(s - 0.3, s + 0.3)) continue
-      e.position.set(x + trackX(s), trackHeight(s) + SLEEPER_H / 2, zAt(s))
-      e.rotation.set(Math.atan(trackSlope(s)), -Math.atan(trackXSlope(s)), 0, 'YXZ')
+      e.position.set(x + pathX(s), trackHeight(s) + SLEEPER_H / 2, pathZ(s))
+      e.rotation.set(Math.atan(trackSlope(s)), pathYaw(s), 0, 'YXZ')
       e.scale.set(1, 1, 1)
       e.updateMatrix()
       sleepers.setMatrixAt(k++, e.matrix)
@@ -307,7 +330,41 @@ function raised() {
       start = null
     }
   }
-  return out
+  return out.filter(([a]) => a < PATH_JOIN)
+}
+
+// --- Supports along the 2D path (Act 2) --------------------------------------------------------
+// Under every elevated stretch: a column of stacked, slightly stepped blocks from the
+// ground to the rail bed, turned with the line, coloured by the area (basalt by the
+// volcano, sea cliff at the cove, snowy rock up the mountain, ice at the glacier).
+function act2Style(s) {
+  if (s < 3990) return ['#3a2e2c', '#4a3a36', '#5a4a44'] // Ashfall Volcano: basalt
+  if (s < 4520) return ['#2f2a3a', '#3e3650', '#5a4e7a'] // Lava Tubes / Crystal Caverns
+  if (s < 5700) return ['#a9a08e', '#c2b9a3', '#6fbf4a'] // Lighthouse Cove: sea cliff, grass top
+  if (s < 7060) return ['#7d8698', '#9aa3b4', '#f4f8ff'] // the mountain: rock with snow
+  return ['#bfe4f4', '#d8f0fa', '#f4fbff'] // the glacier
+}
+function pathSupports(g) {
+  const step = 2.2
+  for (let s = PATH_JOIN + 1; s < T.length; s += step) {
+    if (!hasRail(s) || !hasRail(s + step)) continue
+    const h = heightAt(s)
+    if (h < 0.7) continue
+    const [body, band, top] = act2Style(s)
+    const yaw = pathYaw(s)
+    const x = pathX(s)
+    const z = pathZ(s)
+    const w = 4.4 + Math.min(10, h * 0.12)
+    // Bridges stand on piers (Volcano lava bridge), everything else on solid rock.
+    if (s > 3800 && s < 3930 && Math.floor(s / step) % 3 !== 0) {
+      block(g, 4.2, 0.6, step + 0.05, x, VALLEY_Y + h - 0.55, z, band, { yaw, shadow: false })
+      continue
+    }
+    const hb = Math.max(0.5, h - 0.25)
+    block(g, w, hb, step + 0.05, x, VALLEY_Y + hb / 2, z, body, { yaw, shadow: h > 6 })
+    block(g, w + 0.6, 0.45, step + 0.1, x, VALLEY_Y + h - 0.45, z, top, { yaw, shadow: false })
+    if (h > 12 && Math.floor(s / step) % 4 === 0) block(g, w + 1.2, 0.8, step + 0.1, x, VALLEY_Y + h * 0.55, z, band, { yaw, shadow: false })
+  }
 }
 function supportStyle(s) {
   if (s >= T.lift.s0 - 5 && s <= T.tunnels[0].s1 + 5) return 'mountain'
@@ -561,7 +618,11 @@ export function buildTracks(scene, gearById) {
     if (home) {
       embankments(staticG, x)
       supports(staticG, x, home)
-      bufferStop(staticG, x, T.length + 1.6, 1)
+      pathSupports(staticG)
+      // The buffer stop at the end of the line (the Diamond Terminus), turned with the path.
+      const endS = T.length + 1.6
+      const end = group(staticG, x + pathX(endS), 0, pathZ(endS), pathYaw(endS))
+      bufferStop(group(end, 0, 0, -zAt(endS)), 0, endS, 1) // bufferStop() places itself at zAt(s)
     }
 
     stall(staticG, x + LAYOUT.stall[0], LAYOUT.stall[1])

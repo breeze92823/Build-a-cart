@@ -6,7 +6,7 @@
 // the top speed), brakes and gravity along the slope. Past the broken bridge's
 // lip it flies as a projectile in (s, y) and either lands on the far deck or
 // hits the canyon (cliff face or spikes).
-import { BASE_DRAG, CART, LEAN, TRACK } from './config.js'
+import { BASES, BASE_DRAG, BRAKE, CART, LEAN, SURFACES, TRACK } from './config.js'
 
 const T = TRACK
 const smooth = (u) => u * u * (3 - 2 * u)
@@ -17,6 +17,12 @@ export const LIP_Y = T.lipHeight - D
 export const LAND_Y = T.landHeight - D
 export const FLOOR_Y = T.canyonFloor - D
 
+// The gaps the cart jumps: the canyon (its ramp/deck are special-cased in profile) and
+// the Glacier Gap on the key-point chain. lipY / landY / floorY are world y.
+const GL = T.glacier
+export const GAPS = [
+  { lip: T.lipS, end: T.gapEnd, lipY: T.lipHeight - D, landY: T.landHeight - D, floorY: T.canyonFloor - D, kind: 'spikes', name: 'canyon' },
+]
 // Rail height (world y) at s. In the gap there is no rail.
 export function trackHeight(s) {
   if (s <= T.dropStart) return 0
@@ -43,6 +49,7 @@ function profile(s) {
   if (s < T.gapEnd) return T.canyonFloor
   if (s <= T.landFlat) return T.landHeight
   if (s < T.landEnd) return T.landHeight * (1 - smooth((s - T.landFlat) / (T.landEnd - T.landFlat)))
+  if (s > GL.lip && s < GL.end) return glacierFloor
   return hill(s, 0)
 }
 
@@ -79,13 +86,19 @@ function profileSlope(s) {
   }
   if (s < T.gapEnd) return 0
   if (s <= T.landFlat) return 0
+  if (s > GL.lip && s < GL.end) return 0
   if (s >= T.landEnd) return hill(s, 1)
   const L = T.landEnd - T.landFlat
   const u = (s - T.landFlat) / L
   return (-T.landHeight * 6 * u * (1 - u)) / L
 }
 
-export const hasRail = (s) => s <= T.lipS || s >= T.gapEnd
+// The Glacier Gap: its lip and far side come off the key-point chain, its floor `depth` below the lip.
+const glacierLipH = hill(GL.lip, 0)
+const glacierFloor = glacierLipH - GL.depth
+GAPS.push({ lip: GL.lip, end: GL.end, lipY: glacierLipH - D, landY: hill(GL.end, 0) - D, floorY: glacierFloor - D, kind: 'crevasse', name: 'glacier' })
+export const hasRail = (s) => GAPS.every((g) => s <= g.lip || s >= g.end)
+export const gapAt = (s) => GAPS.find((g) => s > g.lip - 0.5 && s < g.end + 0.5) ?? null
 
 // --- Bends: every track shifts sideways by trackX(s) (TRACK.bends) -----------------------
 // d = 0 offset (m, +X), 1 slope dx/ds, 2 curvature d2x/ds2 (+ = bending towards +X, right).
@@ -111,6 +124,75 @@ export const trackXCurve = (s) => bend(s, 2)
 // Yaw of the rails at s (rotation.y for a model facing -Z).
 export const trackYaw = (s) => -Math.atan(bend(s, 1))
 
+// --- The path: where the (home / shared) line is in the world ---------------------------------
+// Up to TRACK.join the line runs north (z = BASES.cartZ - s) with the sideways bends;
+// past it, it is the 2D path built from TRACK.path (turns ease in and out), sampled
+// every PATH_STEP m: x, z, yaw (rotation.y for a model facing -Z) and lateral
+// curvature (+ = turning right, towards +X when heading -Z).
+const JOIN = T.join
+const PATH_STEP = 0.5
+const PN = Math.ceil((T.length + 40 - JOIN) / PATH_STEP) + 2
+const PX = new Float32Array(PN)
+const PZ = new Float32Array(PN)
+const PY = new Float32Array(PN)
+const PK = new Float32Array(PN)
+// Turns past the join: { s0, s1, deg } (for corner signs, grades and the auto driver).
+export const TURNS = []
+{
+  let x = bend(JOIN, 0)
+  let z = BASES.cartZ - JOIN
+  let yaw = -Math.atan(bend(JOIN, 1))
+  let sAt = JOIN
+  // Curvature at s (from the segment list).
+  const segs = []
+  for (const seg of T.path) {
+    const len = seg[0] === 'S' ? seg[1] : seg[2]
+    const k0 = seg[0] === 'S' ? 0 : ((2 * seg[1] * Math.PI) / 180) / len // peak of the sin^2 profile
+    segs.push({ s0: sAt, s1: sAt + len, k0 })
+    if (seg[0] === 'T') TURNS.push({ s0: sAt, s1: sAt + len, deg: seg[1] })
+    sAt += len
+  }
+  const curveAt = (s) => {
+    for (const g of segs) if (s >= g.s0 && s < g.s1) return g.k0 ? g.k0 * Math.sin((Math.PI * (s - g.s0)) / (g.s1 - g.s0)) ** 2 : 0
+    return 0
+  }
+  for (let i = 0; i < PN; i++) {
+    const s = JOIN + i * PATH_STEP
+    const k = curveAt(s)
+    PX[i] = x
+    PZ[i] = z
+    PY[i] = yaw
+    PK[i] = k
+    // Integrate half a step at a time (midpoint) so long turns close up accurately.
+    const kMid = curveAt(s + PATH_STEP / 2)
+    const yMid = yaw - kMid * (PATH_STEP / 2)
+    x += -Math.sin(yMid) * PATH_STEP
+    z += -Math.cos(yMid) * PATH_STEP
+    yaw -= kMid * PATH_STEP
+  }
+}
+function pathSample(arr, s) {
+  const f = Math.max(0, Math.min(PN - 1.001, (s - JOIN) / PATH_STEP))
+  const i = Math.floor(f)
+  const t = f - i
+  return arr[i] + (arr[i + 1] - arr[i]) * t
+}
+// x (relative to the home base) and world z of the line at s.
+export const pathX = (s) => (s <= JOIN ? bend(s, 0) : pathSample(PX, s))
+export const pathZ = (s) => (s <= JOIN ? BASES.cartZ - s : pathSample(PZ, s))
+export const pathYaw = (s) => (s <= JOIN ? -Math.atan(bend(s, 1)) : pathSample(PY, s))
+// Sideways curvature of the line (+ right): the bends, then the path's turns.
+export const turnCurve = (s) => (s <= JOIN ? bend(s, 2) : pathSample(PK, s))
+// A point `side` m to the right of the line at s (and `up` above the rails' height): out = { x, y, z }.
+export function pathPoint(s, side, out, homeX = 0) {
+  const yaw = pathYaw(s)
+  out.x = homeX + pathX(s) + Math.cos(yaw) * side
+  out.z = pathZ(s) - Math.sin(yaw) * side
+  out.y = trackHeight(s)
+  return out
+}
+export const PATH_JOIN = JOIN
+
 // --- Merge: the side bases' tracks join the home track (TRACK.merge) -------------------------
 // Share of a side track's sideways offset from the home track still left at s:
 // 1 at the bases, easing to 0 where the tracks have joined. d = 1 gives d/ds.
@@ -122,28 +204,43 @@ export function mergeK(s, d = 0) {
   return d ? (-6 * u * (1 - u)) / (s1 - s0) : 1 - smooth(u)
 }
 // x of the track that starts at base x0 (home track at homeX) at s, bends included.
-export const laneX = (x0, homeX, s) => homeX + (x0 - homeX) * mergeK(s) + trackX(s)
+export const laneX = (x0, homeX, s) => homeX + (x0 - homeX) * mergeK(s) + pathX(s)
 // dx/ds of that track.
 export const laneXSlope = (x0, homeX, s) => (x0 - homeX) * mergeK(s, 1) + trackXSlope(s)
-// Which bend [index] s is in (or -1).
+// Every corner on the line: [s0, s1, deg] (valley bends have no deg).
+export const CORNERS = [...T.bends.map(([s0, s1]) => ({ s0, s1, deg: 0 })), ...TURNS]
+// Which corner [index into CORNERS] s is in (or -1).
 export function bendAt(s) {
-  for (let i = 0; i < T.bends.length; i++) if (s > T.bends[i][0] && s < T.bends[i][1]) return i
+  for (let i = 0; i < CORNERS.length; i++) if (s > CORNERS[i].s0 && s < CORNERS[i].s1) return i
   return -1
 }
+// Surface modifiers at s ({ grip, roll, burn, kind } or null).
+export function surfaceAt(s) {
+  for (const f of SURFACES) if (s >= f.s0 && s < f.s1) return f
+  return null
+}
 // Push into the lean (in LEAN.accel units) at speed v on s.
-export const leanDemand = (s, v) => (v * v * bend(s, 2)) / LEAN.accel
-// The fastest a cart with this grip takes the bend at s when leaning fully (m/s).
+export const leanDemand = (s, v) => (v * v * turnCurve(s)) / LEAN.accel
+// The fastest a cart with this grip takes the corner at s steady when leaning fully (m/s).
 export function safeSpeed(s, grip) {
-  const k = Math.abs(bend(s, 2))
-  return k < 1e-6 ? Infinity : Math.sqrt(((1 + grip * LEAN.green) * LEAN.accel) / k)
+  const k = Math.abs(turnCurve(s))
+  const g = grip * (surfaceAt(s)?.grip ?? 1)
+  return k < 1e-6 ? Infinity : Math.sqrt(((1 + g * LEAN.green) * LEAN.accel) / k)
 }
-// The tightest bend in [s, s + ahead] (|curvature| max) for braking ahead of it.
-function maxCurveAhead(s, ahead) {
-  let k = 0
-  for (let x = s; x <= s + ahead; x += 4) k = Math.max(k, Math.abs(bend(x, 2)))
-  return k
+// The slowest safe speed in [s, s + ahead] for this grip (the auto driver brakes for it).
+function minSafeAhead(s, ahead, grip) {
+  let v = Infinity
+  for (let x = s; x <= s + ahead; x += 3) v = Math.min(v, safeSpeed(x, grip))
+  return v
 }
-export const onLift = (s) => s >= T.lift.s0 && s <= T.lift.s1
+// True if a corner starts within [s - back, s + ahead] (no airtime there: the flanges hold the cart).
+export function cornerNear(s, back = 5, ahead = 60) {
+  for (const c of CORNERS) if (c.s1 > s - back && c.s0 < s + ahead) return true
+  return false
+}
+// The chain lift at s (or null).
+export const liftAt = (s) => T.lifts.find((l) => s >= l.s0 && s <= l.s1) ?? null
+export const onLift = (s) => !!liftAt(s)
 
 // Effective stats from the equipped gear (GEAR entries), extra carts and modifiers.
 // mods: { fuelSaver, fuelBonus (x tank), speed (event top-speed factor),
@@ -163,6 +260,9 @@ export function cartStats(gear, wagons = 0, mods = {}) {
     boostTime: gear.booster.time,
     charges: gear.booster.charges,
     grip: (gear.wheels.grip ?? 1) * (mods.grip ?? 1),
+    // The furthest the rails go for this cart: the end of the line, or the shut
+    // Golden Gate (mods.gateShut) without the rebirths to open it.
+    limit: mods.gateShut ? T.gate.s - 2 : T.length,
   }
 }
 
@@ -196,6 +296,9 @@ export function newCart(st, s = 0) {
     tip: 0, // see LEAN: 0 steady, |1| = on the edge of coming off
     danger: 0, // s spent past |tip| 1
     lifted: false, // the chain lift has caught the cart this run
+    heat: 0, // brake heat 0..1+ (BRAKE); faded: the brakes are cooked until it cools
+    faded: false,
+    gap: null, // the gap being jumped (GAPS entry) while flying one
   }
 }
 
@@ -219,22 +322,35 @@ export function stepCart(c, input, st, dt, events = []) {
   if (c.crashed) return events
   const auto = input.lean === undefined
   if (auto && !c.air && c.v > 5) {
-    // Brake ahead of a bend to the speed it takes steady.
-    const k = maxCurveAhead(c.s, 25 + (c.v * c.v) / (2 * CART.brake))
-    if (k > 1e-6 && c.v > LEAN.autoMargin * Math.sqrt(((1 + st.grip * LEAN.green) * LEAN.accel) / k)) {
+    // Brake ahead of a corner to the speed it takes steady.
+    const vs = minSafeAhead(c.s, 25 + (c.v * c.v) / (2 * CART.brake), st.grip)
+    if (c.v > LEAN.autoMargin * vs) {
       input = { ...input, throttle: 0, brake: 1 }
       c.boostLeft = 0 // a booster burning into a bend: the sim driver lets go of it
     }
   }
+  const surf = surfaceAt(c.s)
+  // Brake heat (riders only: the sim driver brakes perfectly anyway).
+  let brakeIn = input.brake
+  if (!auto) {
+    c.heat = Math.max(0, c.heat + (brakeIn > 0.05 && Math.abs(c.v) > 1 ? BRAKE.heat * brakeIn : -BRAKE.cool) * dt)
+    if (c.heat >= 1 && !c.faded) {
+      c.faded = true
+      events.push('brakeFade')
+    }
+    if (c.faded && c.heat < BRAKE.recover) c.faded = false
+    if (c.faded) brakeIn *= BRAKE.fade
+  }
   const g = CART.gravity
   let thrust = 0
-  // Golden Station: the platform's brakes take over and stop the cart at the buffers.
-  const station = !c.air && c.s >= T.station
+  // The Diamond Terminus: the platform's brakes take over and stop the cart at the buffers.
+  const end = st.limit ?? T.length
+  const station = !c.air && c.s >= T.terminus && end >= T.length
   const throttle = c.fuel > 0 && !station ? input.throttle : 0
   c.throttle = throttle
   if (throttle > 0) {
     thrust += st.accel * throttle
-    c.fuel -= dt * throttle * st.burn
+    c.fuel -= dt * throttle * st.burn * (surf?.burn ?? 1)
     if (c.fuel <= 0) {
       c.fuel = 0
       events.push('fuelOut')
@@ -252,7 +368,8 @@ export function stepCart(c, input, st, dt, events = []) {
     const sin = slope * cos
     let a = thrust - g * sin
     const stationBrake = station && c.v > 0 ? (c.v * c.v) / (2 * Math.max(0.5, T.length - 0.8 - c.s)) : 0
-    const resist = st.roll + st.drag * c.v * c.v + CART.brake * input.brake + stationBrake
+    // Brakes bite harder the faster the cart goes (air brakes), so a fast cart can always slow for a corner.
+    const resist = st.roll * (surf?.roll ?? 1) + st.drag * c.v * c.v + CART.brake * brakeIn * (1 + Math.abs(c.v) / CART.brakeSpeed) + stationBrake
     if (c.v > 0.02) a -= resist
     else if (c.v < -0.02) a += resist
     else if (Math.abs(a) <= resist) {
@@ -260,10 +377,11 @@ export function stepCart(c, input, st, dt, events = []) {
       c.v = 0
     }
     c.v += a * dt
-    // The chain lift: the chain dogs catch the cart and haul it up at a walk.
-    c.chain = onLift(c.s) && c.v <= T.lift.speed + 0.01
+    // A chain lift: the chain dogs catch the cart and haul it up at a walk.
+    const lift = liftAt(c.s)
+    c.chain = !!lift && c.v <= lift.speed + 0.01
     if (c.chain) {
-      c.v = T.lift.speed
+      c.v = lift.speed
       if (!c.lifted) {
         c.lifted = true
         events.push('lift')
@@ -278,25 +396,30 @@ export function stepCart(c, input, st, dt, events = []) {
       c.s = 0
       c.v = 0
     }
-    if (before >= T.gapEnd && c.s < T.gapEnd + 0.3) {
-      // Rolled back to the broken end of the far deck: stop there. (Only from the far
-      // side: a cart crossing the near lip must launch below, not land on the deck.)
-      c.s = T.gapEnd + 0.3
-      c.v = 0
+    let launched = null
+    for (const gp of GAPS) {
+      if (before >= gp.end && c.s < gp.end + 0.3) {
+        // Rolled back to the broken end of the far deck: stop there. (Only from the far
+        // side: a cart crossing the near lip must launch below, not land on the deck.)
+        c.s = gp.end + 0.3
+        c.v = 0
+      }
+      if (before <= gp.lip && c.s > gp.lip) launched = gp
     }
-    if (c.s >= T.length) {
-      c.s = T.length
+    if (c.s >= end) {
+      c.s = end
       if (c.v > 1) events.push('bufferStop')
       c.v = 0
     }
-    if (before <= T.lipS && c.s > T.lipS) {
-      // Off the end of the broken bridge: fly.
-      const lipSlope = trackSlope(T.lipS)
+    if (launched) {
+      // Off the lip: fly.
+      const lipSlope = trackSlope(launched.lip - 0.01)
       const lc = 1 / Math.sqrt(1 + lipSlope * lipSlope)
       c.vx = c.v * lc
       c.vy = c.v * lipSlope * lc
-      c.y = LIP_Y
+      c.y = launched.lipY
       c.air = true
+      c.gap = launched
       c.airTime = 0
       c.airPeak = 0
       events.push('launch')
@@ -306,7 +429,7 @@ export function stepCart(c, input, st, dt, events = []) {
       const demand = leanDemand(c.s, c.v) + (input.side ?? 0)
       const want = auto ? Math.max(-1, Math.min(1, demand)) : Math.max(-1, Math.min(1, input.lean))
       c.lean += (want - c.lean) * Math.min(1, dt * LEAN.rate)
-      c.tip = (demand - c.lean) / st.grip
+      c.tip = (demand - c.lean) / (st.grip * (surf?.grip ?? 1))
       // The further past the edge, the sooner it goes (a flick through at 3x the push is no escape).
       if (Math.abs(c.tip) > 1) c.danger += dt * Math.abs(c.tip)
       else c.danger = Math.max(0, c.danger - dt * 2)
@@ -319,7 +442,8 @@ export function stepCart(c, input, st, dt, events = []) {
       // Over a crest: if the rails curve away faster than gravity can pull the
       // cart round, it leaves them (airtime) and flies until it meets them again.
       const k = trackCurve(c.s)
-      if (k < 0 && c.v > 0 && c.s > T.landEnd) {
+      // (No airtime near a corner, nor on the run down from the Glacier Gap into the terminus.)
+      if (k < 0 && c.v > 0 && c.s > T.landEnd && hasRail(c.s + 2) && !cornerNear(c.s) && !(c.s > GL.end - 5)) {
         const sl = trackSlope(c.s)
         const q = 1 + sl * sl
         const pull = g / Math.sqrt(q) + (c.v * c.v * k) / (q * Math.sqrt(q))
@@ -344,7 +468,9 @@ export function stepCart(c, input, st, dt, events = []) {
     c.airPeak = Math.max(c.airPeak, c.y - trackHeight(c.s))
     const prevS = c.s
     // Hops keep the rail drag (low air drag would make bouncing over crests a speed trick).
-    c.vx += c.hop ? (thrust - st.drag * c.vx * c.vx) * dt : (thrust * 0.6 - CART.airDrag * c.vx * c.vx) * dt
+    // Over the canyon the engine still helps a little; over the Glacier Gap the jump is pure ballistics.
+    const airPush = c.hop ? 1 : c.gap && c.gap !== GAPS[0] ? 0 : 0.6
+    c.vx += c.hop ? (thrust - st.drag * c.vx * c.vx) * dt : (thrust * airPush - CART.airDrag * c.vx * c.vx) * dt
     const vy0 = c.vy
     c.vy -= g * dt
     c.s += c.vx * dt
@@ -352,11 +478,12 @@ export function stepCart(c, input, st, dt, events = []) {
     // the canyon jump keeps the integration it was balanced with.
     c.y += (c.hop ? (vy0 + c.vy) / 2 : c.vy) * dt
     c.pitch = Math.atan2(c.vy, Math.max(1, c.vx)) * 0.8
-    if (c.s >= T.gapEnd) {
+    const gp = c.hop ? null : c.gap ?? GAPS[0]
+    if (!gp || c.s >= gp.end) {
       const ground = trackHeight(c.s)
-      if (prevS < T.gapEnd && c.y < LAND_Y - 0.7) {
-        // Slammed into the far cliff: bounce off it and fall to the spikes.
-        c.s = T.gapEnd - 0.6
+      if (gp && prevS < gp.end && c.y < gp.landY - 0.7) {
+        // Slammed into the far cliff: bounce off it and fall to the bottom.
+        c.s = gp.end - 0.6
         c.vx = -Math.abs(c.vx) * 0.15
         c.vy = Math.min(c.vy, 2)
         c.hitWall = true
@@ -373,21 +500,21 @@ export function stepCart(c, input, st, dt, events = []) {
           c.hop = false
           events.push('touchdown')
         } else {
-          c.jumped = true
+          if (gp === GAPS[0]) c.jumped = true
           events.push('land')
         }
       }
-      if (c.s >= T.length) {
-        c.s = T.length
+      if (c.s >= end) {
+        c.s = end
         c.vx = Math.min(c.vx, 0)
       }
-    } else if (c.s < T.lipS - 0.5 && c.y < LIP_Y - 0.5 && c.vx < 0) {
+    } else if (c.s < gp.lip - 0.5 && c.y < gp.lipY - 0.5 && c.vx < 0) {
       // Bounced back into the near wall: just drop.
-      c.s = T.lipS + 0.2
+      c.s = gp.lip + 0.2
       c.vx = 0
-    } else if (c.y <= FLOOR_Y + 1.2) {
-      c.y = FLOOR_Y + 1.2
-      c.crashed = 'spikes'
+    } else if (c.y <= gp.floorY + 1.2) {
+      c.y = gp.floorY + 1.2
+      c.crashed = gp.kind
       events.push('crash')
     }
   }

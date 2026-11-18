@@ -11,12 +11,11 @@
 // Never throws: a missing field or a failed look just leaves the stand-in character.
 import { Group, Vector3 } from 'three'
 import { BASES, CART, CART_FEEL, CAVE, LEAN, MULTI, NET, TRACK } from './config.js'
-import { laneX, laneXSlope, trackHeight } from './cartPhysics.js'
+import { PATH_JOIN, laneX, laneXSlope, pathYaw, pathZ, trackHeight } from './cartPhysics.js'
 import { buildCart, buildWagon } from './cartModel.js'
 import { CartFeel } from './cartFeel.js'
 import { sfx, sfxAt } from './audio/index.js'
 import { RAIL_TOP, canvasSprite } from './track.js'
-import { zAt } from './world.js'
 import { net } from './net.js'
 import { gearById } from './state.js'
 import { buildDefaultCharacter, loadBaseCharacter } from './avatar/character.js'
@@ -255,20 +254,20 @@ class Remote {
     return laneX(this.x0, HOME, s) + this.lx
   }
   cartYaw(s) {
-    return -Math.atan(laneXSlope(this.x0, HOME, s))
+    return s > PATH_JOIN ? pathYaw(s) : -Math.atan(laneXSlope(this.x0, HOME, s))
   }
 
   placeCart(s, y, pitch, roll, spinV, dt, visible) {
     const c = this.cart
     c.visible = visible
-    c.position.set(this.cartX(s), y + RAIL_TOP + (c.userData.hover ? 0.25 : 0), zAt(s))
+    c.position.set(this.cartX(s), y + RAIL_TOP + (c.userData.hover ? 0.25 : 0), pathZ(s))
     c.rotation.y = this.cartYaw(s)
     c.rotation.z = roll
     c.userData.rail.rotation.x = pitch
     this.wagons.forEach((w, i) => {
       const q = this.riding ? this.trail.at((i + 1) * CART.wagonGap + this.feel.back(i)) : { s: s - (i + 1) * CART.wagonGap, y: railY(s - (i + 1) * CART.wagonGap), pitch: 0 }
       w.visible = visible
-      w.position.set(this.cartX(q.s), q.y + RAIL_TOP, zAt(q.s))
+      w.position.set(this.cartX(q.s), q.y + RAIL_TOP, pathZ(q.s))
       w.rotation.y = this.cartYaw(q.s)
       w.rotation.z = roll * 0.6
       w.userData.rail.rotation.x = q.pitch
