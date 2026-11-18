@@ -890,7 +890,6 @@ export const NET = {
   retryMax: 60,
   rejoin: 2, // s after a dropped room before rejoining
   requestTimeout: 8, // s a request (quest re-roll) waits for its answer
-  localSave: 'build-a-cart.save.v2', // guests and serverless play keep their save in this browser
   poseEvery: 0.1, // s between foot poses sent while walking (and changed)
   cartEvery: 0.05, // s between cart states sent while riding
   heartbeat: 1, // s between repeats of an unchanged pose, so late joiners see it

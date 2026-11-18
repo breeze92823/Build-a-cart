@@ -1,6 +1,6 @@
 // Everything the player owns and has done. One mutable `state` object; mutate it
 // only through the helpers below, which notify listeners (HUD, signs, windows) and
-// ask net.js to save (to the server for signed-in players, this browser for guests).
+// ask net.js to save (to the server, signed-in players only; guests are not saved).
 // The run cash formula, Cart Upgrades, Shop stock, rebirth, quests and save slots
 // all live here; config.js holds their numbers.
 import {
@@ -52,7 +52,7 @@ export const state = fresh()
 // --- Save in / out (net.js) -------------------------------------------------------------
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d)
-// A saved doc (server `progress` or the browser save) -> state. Unknown gear ids
+// A saved doc (the server's `progress`) -> state. Unknown gear ids
 // (an old catalogue) are dropped; missing fields keep their fresh defaults.
 export function hydrate(doc) {
   const f = fresh()

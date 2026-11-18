@@ -27,7 +27,7 @@ import { createEvents } from './events.js'
 import { createHud } from './ui/hud.js'
 import { initThumbs, thumb } from './ui/thumbs.js'
 import * as W from './ui/windows.js'
-import { initNet, net, refreshQuestSchedule, sendEmote } from './net.js'
+import { initNet, net, onLeaderboard, refreshQuestSchedule, sendEmote } from './net.js'
 import { addSpot, updateInteract } from './interact.js'
 import { createCarry } from './carry.js'
 import { installAudio, sfx, setAdMuted, setVolume, updateAudio } from './audio/index.js'
@@ -175,7 +175,7 @@ fx = createFx(scene, preset.particles)
 resize()
 const events = createEvents()
 initThumbs(renderer)
-// The save: this browser's copy now, the server's once it answers (net.js).
+// The save: a fresh state now, the server's saved progress once it answers (net.js). Nothing is kept in the browser.
 initNet()
 
 const playerApi = {
@@ -280,9 +280,14 @@ bloxity.onAdBreak((on) => {
   paused = on
   if (!on) clockT.getDelta() // the break is not game time
 })
-// No server (offline play inside the portal): submit the best distance to the portal's board ourselves.
+// No server (offline play inside the portal): submit every board's score to the portal ourselves
+// (ids = config.js LEADERBOARDS; the server reports them for signed-in players otherwise).
 S.onChange((what) => {
-  if (what === 'run' && !net.connected) bloxity.submitScore('best', S.state.stats.best)
+  if (what !== 'run' || net.connected) return
+  bloxity.submitScore('best', S.state.stats.best)
+  bloxity.submitScore('earned', S.state.totalEarned)
+  bloxity.submitScore('rebirths', S.state.rebirths)
+  bloxity.submitScore('playtime', Math.floor((S.state.stats.playtime ?? 0) / 60))
 })
 // Bought engines / fuel tanks: hotbar -> in hand -> hold E at the cart to attach.
 const hand = new Group()
@@ -435,12 +440,47 @@ S.onChange((what) => {
   refreshAll()
   if (what === 'run' || what === 'gear' || what === 'rebirth' || what === 'wagons' || what === 'reset') refreshBoards()
 })
+// The four global leaderboards in the hub's corners (ids = config.js LEADERBOARDS). Rows come from
+// Bloxity's hosted boards (the ones behind the trophy button) when the SDK answers, else from the game
+// server's own top lists (`leaderboard` message, the saved stat names below; play time there is s, here min).
+const BOARD_STAT = { best: 'best', earned: 'totalEarned', rebirths: 'rebirths', playtime: 'playtime' }
+let sdkBoards = {}
+let serverBoards = null
+function refreshGlobalBoards() {
+  const rows = {}
+  for (const id of Object.keys(BOARD_STAT)) {
+    const fromServer = serverBoards?.[BOARD_STAT[id]]
+    rows[id] = sdkBoards[id]?.length
+      ? sdkBoards[id]
+      : Array.isArray(fromServer)
+        ? fromServer.map((r) => ({ name: r.name, value: id === 'playtime' ? Math.floor(r.value / 60) : r.value }))
+        : []
+  }
+  cave.setGlobalBoards(rows)
+}
+async function pullSdkBoards() {
+  const ids = Object.keys(BOARD_STAT)
+  const tops = await Promise.all(ids.map((id) => bloxity.getBoardTop(id, 10)))
+  ids.forEach((id, i) => {
+    if (tops[i]) sdkBoards[id] = tops[i]
+  })
+  refreshGlobalBoards()
+}
+onLeaderboard((boards) => {
+  serverBoards = boards
+  refreshGlobalBoards()
+})
+setInterval(pullSdkBoards, 60000)
+
 tracks.redrawOnFont(() => {
   refreshAll()
   refreshBoards()
+  refreshGlobalBoards()
 })
 refreshAll()
 refreshBoards()
+refreshGlobalBoards()
+pullSdkBoards()
 
 // Keep the HUD out of the platform's toolbar and chat corner.
 const hudLeft = hud.root.querySelector('.hud-left')

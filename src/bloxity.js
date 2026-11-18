@@ -530,6 +530,19 @@ export async function submitScore(board, score) {
     return null
   }
 }
+// The top rows of one of Bloxity's hosted boards (the ones behind the trophy button), for the hub's
+// corner boards: [{ name, value }], or null when the SDK / board is unavailable. Never throws.
+export async function getBoardTop(board, limit = 10) {
+  try {
+    const lb = sdk()?.leaderboard
+    if (typeof lb?.getTop !== 'function') return null
+    const res = await lb.getTop(board, { limit })
+    if (!Array.isArray(res?.rows)) return null
+    return res.rows.slice(0, limit).map((r) => ({ name: String(r.displayName || r.username || 'Player'), value: Number(r.score) || 0 }))
+  } catch {
+    return null
+  }
+}
 
 // --- Death screen ----------------------------------------------------------------------------
 // The portal runs the respawn countdown (>= 4 s, banner ads); the game draws the buttons and only

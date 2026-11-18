@@ -2,7 +2,8 @@
 // voxel lumps, green moss, glowing crystals (red ones set in the walls,
 // colourful clusters on the floor), cobwebs, dynamite and fences. Along the
 // walls: the Upgrades stall (restocking shop), the Sell Gear, Gear Index and
-// Daily Gift pads, the Lucky Wheel in a glass case and two record boards. The
+// Daily Gift pads, the Lucky Wheel in a glass case, two record boards and the four global
+// leaderboards (one in each corner of the room). The
 // mouth opens north (-Z) through a timbered tunnel onto the valley and bases.
 import {
   AdditiveBlending,
@@ -221,17 +222,36 @@ function pad(root, staticG, x, z, color, fadeTex) {
   return { top, column }
 }
 
-function board(root, x, z, yaw, title, accent) {
+// A framed record board; its face looks along local -Z (so +X for yaw -PI/2). `rows` = rows drawn;
+// `scale` shrinks it; `stand` = a pedestal under the frame plus a solid collider (for free-standing
+// ones such as the corner boards: nobody can walk into or behind them).
+function board(root, x, z, yaw, title, accent, { rows: nRows = 8, pitch = 64, rowH = 54, scale = 1, stand = false } = {}) {
   const g = group(root, x, 0, z, yaw)
+  g.scale.setScalar(scale)
   const frame = accent
-  block(g, 7.6, 9.4, 0.5, 0, 6.2, 0, mixHex(frame, '#000000', 0.1))
-  block(g, 6.8, 8.6, 0.2, 0, 6.2, -0.3, '#1b4f9c')
-  const sprite = canvasSprite(512, 640, 8.2, () => {})
+  const cw = 512
+  const ch = 112 + nRows * pitch + 16
+  const ph = (6.56 * ch) / cw // face height (8.2 for the default 8 rows)
+  const fh = ph + 1.2
+  const cy = 1.5 + fh / 2
+  block(g, 7.6, fh, 0.5, 0, cy, 0, mixHex(frame, '#000000', 0.1))
+  block(g, 6.8, fh - 0.8, 0.2, 0, cy, -0.3, '#1b4f9c')
+  if (stand) {
+    block(g, 7, 1.5, 0.9, 0, 0.75, 0, mixHex(frame, '#000000', 0.45))
+    const top = (1.5 + fh) * scale
+    addFixed(RAPIER.ColliderDesc.cuboid((7.6 * scale) / 2, top / 2, 0.35), { x, y: top / 2, z }, { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
+  }
+  const sprite = canvasSprite(cw, ch, ph, () => {})
   const tex = sprite.material.map
-  const plane = new Mesh(new PlaneGeometry(6.56, 8.2), new MeshBasicMaterial({ map: tex, transparent: true }))
-  plane.position.set(0, 6.2, -0.42)
+  const plane = new Mesh(new PlaneGeometry(6.56, ph), new MeshBasicMaterial({ map: tex, transparent: true }))
+  plane.position.set(0, cy, -0.42)
   plane.rotation.y = Math.PI
   g.add(plane)
+  const fit = (ctx, text, max) => {
+    if (ctx.measureText(text).width <= max) return text
+    while (text.length > 1 && ctx.measureText(`${text}…`).width > max) text = text.slice(0, -1)
+    return `${text}…`
+  }
   const draw = (rows) => {
     sprite.userData.redraw = null
     const c = tex.image
@@ -250,24 +270,27 @@ function board(root, x, z, yaw, title, accent) {
     ctx.strokeText(title, w / 2, 55)
     ctx.fillStyle = '#ffffff'
     ctx.fillText(title, w / 2, 55)
-    rows.forEach((row, i) => {
-      const y = 112 + i * 64
+    rows.slice(0, nRows).forEach((row, i) => {
+      const y = 112 + i * pitch
+      const ty = y + rowH / 2 + 1
       ctx.fillStyle = i === 0 ? '#f0a020' : i === 1 ? '#c6ccd8' : i === 2 ? '#d07a3a' : '#3b8ae8'
       ctx.beginPath()
-      ctx.roundRect(30, y, w - 60, 54, 14)
+      ctx.roundRect(30, y, w - 60, rowH, 14)
       ctx.fill()
       ctx.font = '700 30px Fredoka, "Arial Black", sans-serif'
       ctx.textAlign = 'left'
       ctx.lineWidth = 6
-      ctx.strokeText(`#${i + 1}`, 44, y + 28)
+      ctx.strokeText(`#${i + 1}`, 44, ty)
       ctx.fillStyle = '#ffffff'
-      ctx.fillText(`#${i + 1}`, 44, y + 28)
-      ctx.strokeText(row[0], 104, y + 28)
-      ctx.fillText(row[0], 104, y + 28)
+      ctx.fillText(`#${i + 1}`, 44, ty)
+      const valueW = ctx.measureText(row[1]).width
+      const name = fit(ctx, row[0], w - 46 - valueW - 16 - 104)
+      ctx.strokeText(name, 104, ty)
+      ctx.fillText(name, 104, ty)
       ctx.textAlign = 'right'
-      ctx.strokeText(row[1], w - 46, y + 28)
+      ctx.strokeText(row[1], w - 46, ty)
       ctx.fillStyle = '#ffe86a'
-      ctx.fillText(row[1], w - 46, y + 28)
+      ctx.fillText(row[1], w - 46, ty)
     })
     tex.needsUpdate = true
   }
@@ -333,7 +356,15 @@ export function buildCave(scene) {
   slab(g, -M.halfWidth, M.halfWidth, -3, 0.04, M.z0, I.z0, C.floor, { shadow: false })
 
   // Voxel lumps on the inner walls so they read as carved rock.
-  const lump = (x, y, z, sx, sy, sz) => block(g, sx, sy, sz, x, y, z, rand() < 0.5 ? rock : rockDark, { shadow: false })
+  // (None in the four corners, nor on the side walls up to the record boards (z 30..38): they would
+  // poke through the boards. The colour is still rolled so the rest of the cave's random layout stays.)
+  const lump = (x, y, z, sx, sy, sz) => {
+    const color = rand() < 0.5 ? rock : rockDark
+    const cornerX = x < I.x0 + 8 || x > I.x1 - 8
+    const cornerZ = z < I.z0 + 16 || z > I.z1 - 8
+    if (cornerX && cornerZ) return
+    block(g, sx, sy, sz, x, y, z, color, { shadow: false })
+  }
   for (let i = 0; i < 70; i++) {
     const side = Math.floor(rand() * 3)
     const y = rand() * H
@@ -404,12 +435,12 @@ export function buildCave(scene) {
     ['#53d64a', '#4aa8ff', '#9a4dff'],
   ]
   const clusterAt = [
-    [-23, 70],
-    [23, 70],
+    [-16, 71], // (the corners themselves hold the leaderboards)
+    [16, 71],
     [-9, 72],
     [9, 72],
-    [-24, 28],
-    [24, 28],
+    [-16, 27],
+    [16, 27],
     [-12, 30],
     [13, 41],
   ]
@@ -514,6 +545,24 @@ export function buildCave(scene) {
   const runsBoard = board(root, I.x0 + 0.6, 34, -Math.PI / 2, 'YOUR TOP RUNS', '#2fb04a')
   const recBoard = board(root, I.x1 - 0.6, 34, Math.PI / 2, 'RECORDS', '#3a7be0')
 
+  // The four global leaderboards (Bloxity's hosted boards: config.js LEADERBOARDS), one standing across
+  // each corner of the room at 45 degrees and facing the middle, top 10 each.
+  const CB = { scale: 0.85, rows: 10, pitch: 58, rowH: 50, stand: true }
+  const d = 2.5 // board centre, from both walls
+  const globalBoards = {
+    best: board(root, I.x0 + d, I.z0 + d, -Math.PI * 0.75, 'BEST DISTANCE', '#2fb04a', CB),
+    earned: board(root, I.x1 - d, I.z0 + d, Math.PI * 0.75, 'TOTAL EARNED', '#d9a21b', CB),
+    rebirths: board(root, I.x0 + d, I.z1 - d, -Math.PI * 0.25, 'REBIRTHS', '#a35cff', CB),
+    playtime: board(root, I.x1 - d, I.z1 - d, Math.PI * 0.25, 'PLAY TIME', '#3a7be0', CB),
+  }
+  const hhmm = (min) => (min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${min}m`)
+  const globalFmt = {
+    best: (v) => `${Math.round(v).toLocaleString('en-US')}m`,
+    earned: (v) => fmt(v),
+    rebirths: (v) => Math.round(v).toLocaleString('en-US'),
+    playtime: hhmm,
+  }
+
   // Titles painted on the walls.
   wallText(root, 'BUILD A CART', 0, 13.4, I.z1 - 0.3, Math.PI, 3.4)
   wallText(root, 'Ride • Upgrade • Jump the canyon', 0, 11, I.z1 - 0.3, Math.PI, 1.2, '#bfe8ff')
@@ -617,6 +666,15 @@ export function buildCave(scene) {
     setBoards(runs, records) {
       runsBoard.draw(runs)
       recBoard.draw(records)
+    },
+    // byId: { best|earned|rebirths|playtime: [{ name, value }] } (play time in minutes), best first.
+    setGlobalBoards(byId) {
+      for (const [id, b] of Object.entries(globalBoards)) {
+        const rows = (byId?.[id] ?? []).slice(0, CB.rows).map((r) => [String(r.name), globalFmt[id](Number(r.value) || 0)])
+        if (!rows.length) rows.push(['Be the first!', ''])
+        while (rows.length < CB.rows) rows.push(['---', ''])
+        b.draw(rows)
+      }
     },
     wheelDisk,
     update(dt, t) {
