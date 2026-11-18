@@ -33,7 +33,7 @@ let clearance = 1 // 0..1 of the boom the walls allow, eased back out
 // looking around, pulls back with speed and in the air, tips with the slope
 // (down a drop it looks down it), the FOV widens with speed and punches out
 // while a booster burns, the view shakes, and landings kick it down (a spring).
-const ride = { on: false, speed: 0, shake: 0, air: 0, crashed: false, lookAt: -10, savedZoom: CAMERA.distance, time: 0, slope: 0, boost: false, punch: 0, slopeK: 0 }
+const ride = { on: false, speed: 0, shake: 0, air: 0, crashed: false, lookAt: -10, savedZoom: CAMERA.distance, time: 0, slope: 0, boost: false, punch: 0, slopeK: 0, heading: 0, roll: 0, rollK: 0 }
 const kick = { y: 0, v: 0 }
 export function setRide(on) {
   if (on === ride.on) return
@@ -45,13 +45,16 @@ export function setRide(on) {
     state.pitch = 0.16
   } else {
     zoomTarget = ride.savedZoom
-    ride.speed = ride.shake = ride.air = ride.punch = ride.slopeK = 0
+    ride.speed = ride.shake = ride.air = ride.punch = ride.slopeK = ride.heading = ride.roll = ride.rollK = 0
     ride.boost = false
     kick.y = kick.v = 0
   }
 }
-// air: 0..1 (eased by the ride), slope: rail slope under the cart, boost: a booster burning.
-export function rideState(speed01, shake, air, crashed, slope = 0, boost = false) {
+// air: 0..1 (eased by the ride), slope: rail slope under the cart, boost: a booster burning,
+// heading: the rails' yaw (bends), roll: the cart's lean (the camera banks a little with it).
+export function rideState(speed01, shake, air, crashed, slope = 0, boost = false, heading = 0, roll = 0) {
+  ride.heading = heading
+  ride.roll = roll
   ride.speed = speed01
   ride.shake = shake
   ride.air = typeof air === 'number' ? air : air ? 1 : 0
@@ -109,7 +112,7 @@ export function update(camera, dt) {
     // Swing back behind the cart (yaw 0 = looking down the track, -Z); look
     // down a drop, up a climb, and a little down on the cart in the air.
     const k = 1 - Math.exp(-2.5 * dt)
-    state.yaw += Math.atan2(Math.sin(-state.yaw), Math.cos(-state.yaw)) * k
+    state.yaw += Math.atan2(Math.sin(ride.heading - state.yaw), Math.cos(ride.heading - state.yaw)) * k
     const want = 0.16 + ride.air * 0.12 - Math.max(-0.22, Math.min(0.3, ride.slopeK * 0.45))
     state.pitch += (want - state.pitch) * k
   }
@@ -195,6 +198,8 @@ export function update(camera, dt) {
   camera.position.set(look.x + (px - look.x) * clearance, look.y + (py - look.y) * clearance, look.z + (pz - look.z) * clearance)
   camera.lookAt(look.x, look.y, look.z)
   if (ride.on) {
+    ride.rollK += (ride.roll - ride.rollK) * (1 - Math.exp(-5 * dt))
+    if (Math.abs(ride.rollK) > 0.001) camera.rotateZ(ride.rollK * 0.35)
     camera.position.y += kick.y
     const k = ride.shake * 0.35 + (1 - ride.air) * ride.speed * ride.speed * 0.025 + ride.punch * 0.04
     if (k > 0.001) {

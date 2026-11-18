@@ -2,12 +2,14 @@
 // here may throw when the SDK is missing: a blocked sdk.bloxity.io leaves the
 // game fully playable on the default avatar and keyboard controls.
 // Docs: https://docs.bloxity.io/#html5
-import { GAME_SLUG, GAME_TITLE, SETTINGS, DEV_MODE, coerceSetting } from './config.js'
+import * as THREE from 'three'
+import { AD_SCREENS, GAME_SLUG, GAME_TITLE, LEADERBOARDS, MULTI, SETTINGS, DEV_MODE, coerceSetting } from './config.js'
 
 export function sdk() {
   if (DEV_MODE) return null
   return (typeof window !== 'undefined' && window.Legion && window.Legion.SDK) || null
 }
+export const hasSdk = () => !!sdk()
 
 // --- State --------------------------------------------------------------
 export const settings = {}
@@ -24,7 +26,11 @@ const proportionListeners = new Set()
 const authListeners = new Set()
 const settingListeners = new Set()
 const respawnListeners = new Set()
+const adBreakListeners = new Set()
+const emoteListeners = new Set()
+const chatListeners = new Set()
 const unsubscribers = []
+let adBreakActive = false
 
 function emit(listeners, ...args) {
   for (const fn of listeners) {
@@ -206,10 +212,39 @@ export function init() {
     }
 
     unsubscribers.push(
-      SDK.player.onEvent((event) => {
+      SDK.player.onEvent((event, data) => {
         if (event === 'respawn_request') emit(respawnListeners)
+        else if (event === 'play_emote' && typeof data === 'string') emit(emoteListeners, data)
+        else if (event === 'stop_emote') emit(emoteListeners, '')
       }),
     )
+
+    initAds(SDK)
+    initLeaderboards(SDK)
+    // Party play: friends who launch together are seated in one room (hosted matchmaker, automatic
+    // with maxClients set); a room seats MULTI.maxPlayers.
+    try {
+      SDK.party?.enable?.({ maxPartySize: MULTI.maxPlayers })
+    } catch (err) {
+      console.warn('[bloxity] party.enable failed', err)
+    }
+    // The portal draws the emote picker only for games that register this (after init resolved).
+    registerFeature('emotes')
+    // Overhead chat bubbles: the portal draws the chat UI, the game floats the text over the head.
+    try {
+      const off = SDK.chat?.onMessage?.((m) => {
+        let text = ''
+        try {
+          text = SDK.chat.bubbleText ? SDK.chat.bubbleText(m) : m?.text || ''
+        } catch {
+          text = ''
+        }
+        if (text) emit(chatListeners, { userId: m?.userId ?? '', username: m?.username ?? '', text, isLocal: !!m?.isLocalPlayer })
+      })
+      if (typeof off === 'function') unsubscribers.push(off)
+    } catch (err) {
+      console.warn('[bloxity] chat.onMessage failed', err)
+    }
 
     SDK.game.loadingStep('Building the island')
   } catch (err) {
@@ -407,5 +442,256 @@ export function requestFullscreen(on) {
     else SDK.portal.exitFullscreen()
   } catch {
     // Ignore.
+  }
+}
+
+// --- Ads ----------------------------------------------------------------------------------
+// Ad breaks (required): the portal can start one at any time; main.js freezes the simulation and mutes
+// the audio while isAdBreak(). Screen ads (required): declared once, then screen(type) as the player
+// moves between menus / the run results / the ride. Rewarded ads: showRewardedAd() below.
+function initAds(SDK) {
+  const ads = SDK.ads
+  if (!ads) return
+  const setBreak = (on) => {
+    adBreakActive = on
+    emit(adBreakListeners, on)
+  }
+  for (const [method, on] of [['onBreakStart', true], ['onBreakEnd', false]]) {
+    try {
+      const off = ads[method]?.(() => setBreak(on))
+      if (typeof off === 'function') unsubscribers.push(off)
+    } catch (err) {
+      console.warn(`[bloxity] ads.${method} failed`, err)
+    }
+  }
+  try {
+    ads.declareScreens?.(AD_SCREENS)
+  } catch (err) {
+    console.warn('[bloxity] ads.declareScreens failed', err)
+  }
+}
+
+export const isAdBreak = () => adBreakActive
+// fn(active): true when a break starts, false when it ends. Returns an unsubscribe.
+export function onAdBreak(fn) {
+  adBreakListeners.add(fn)
+  return () => adBreakListeners.delete(fn)
+}
+
+let adScreenType = ''
+// 'menu' | 'results' | 'gameplay' (declared, off unless the dashboard turns it on) | null = nothing showing.
+export function showAdScreen(type) {
+  if ((type || '') === adScreenType) return
+  adScreenType = type || ''
+  try {
+    const ads = sdk()?.ads
+    if (type) ads?.screen?.(type)
+    else ads?.hideScreen?.()
+  } catch {
+    // Non-fatal.
+  }
+}
+
+export const canShowRewardedAd = () => {
+  try {
+    return !!sdk()?.ads?.isAvailable?.()
+  } catch {
+    return false
+  }
+}
+// Plays a rewarded ad. Resolves { status, rewardToken? }: status 'completed' is the only one that earns
+// the reward; anything else ('disabled', 'dismissed', 'error', ...) does not. Never rejects.
+export async function showRewardedAd(placement) {
+  try {
+    const ads = sdk()?.ads
+    if (!ads?.showRewarded || !ads.isAvailable?.()) return { status: 'disabled' }
+    const r = await ads.showRewarded(placement)
+    return { status: r?.status ?? 'error', rewardToken: typeof r?.rewardToken === 'string' ? r.rewardToken : '' }
+  } catch {
+    return { status: 'error' }
+  }
+}
+
+// --- Leaderboards --------------------------------------------------------------------------
+// The server reports signed-in players' scores (hosted games); define() only declares the boards.
+function initLeaderboards(SDK) {
+  try {
+    Promise.resolve(SDK.leaderboard?.define?.(LEADERBOARDS)).catch((err) => console.warn('[bloxity] leaderboard.define failed', err))
+  } catch (err) {
+    console.warn('[bloxity] leaderboard.define failed', err)
+  }
+}
+// Client-side fallback when no game server is reachable (the server reports otherwise). Never throws.
+export async function submitScore(board, score) {
+  try {
+    if (!(score > 0)) return null
+    return (await sdk()?.leaderboard?.submit?.(board, Math.floor(score))) ?? null
+  } catch {
+    return null
+  }
+}
+
+// --- Death screen ----------------------------------------------------------------------------
+// The portal runs the respawn countdown (>= 4 s, banner ads); the game draws the buttons and only
+// restarts when handle.respawn() returns true. Without the SDK the game's own timer is the fallback.
+export const hasDeathScreen = () => typeof sdk()?.deathScreen?.show === 'function'
+// { onCountdown(fn) -> unsubscribe, respawn() -> boolean, ready }, or null.
+export function showDeathScreen() {
+  try {
+    return sdk()?.deathScreen?.show?.() ?? null
+  } catch {
+    return null
+  }
+}
+export function hideDeathScreen() {
+  try {
+    sdk()?.deathScreen?.hide?.()
+  } catch {
+    // Non-fatal.
+  }
+}
+
+// --- Emotes ------------------------------------------------------------------------------------
+// fn(emoteId) when the portal's emote picker plays one; fn('') when it asks to stop.
+export function onPortalEmote(fn) {
+  emoteListeners.add(fn)
+  return () => emoteListeners.delete(fn)
+}
+export function apiUrl() {
+  try {
+    return (sdk()?.environment?.()?.apiUrl || 'https://api.bloxity.io').replace(/\/$/, '')
+  } catch {
+    return 'https://api.bloxity.io'
+  }
+}
+let emoteCatalog = null
+// The catalogue clip { len, loop, tracks: { Bone: [[t, xDeg, yDeg, zDeg], ...] } } for an emote id, or null.
+export async function getEmoteClip(id) {
+  try {
+    if (!sdk()) return null
+    if (!emoteCatalog) {
+      const res = await fetch(`${apiUrl()}/v1/avatar/emotes`)
+      if (!res.ok) return null
+      const json = await res.json()
+      const list = Array.isArray(json) ? json : json?.emotes ?? []
+      emoteCatalog = new Map(list.filter((e) => e?.id && e.clip?.tracks).map((e) => [String(e.id), e.clip]))
+    }
+    return emoteCatalog.get(String(id)) ?? null
+  } catch {
+    return null
+  }
+}
+
+// --- Chat --------------------------------------------------------------------------------------
+// fn({ userId, username, text, isLocal }) for every room chat message. Returns an unsubscribe.
+export function onChatMessage(fn) {
+  chatListeners.add(fn)
+  return () => chatListeners.delete(fn)
+}
+// A speech bubble over `root` (three.js sprite built by the SDK with the game's own THREE), or null.
+export function attachChatBubble(root, text, height = 2.3) {
+  try {
+    return sdk()?.chat?.attachBubble?.(THREE, root, text, { height }) ?? null
+  } catch {
+    return null
+  }
+}
+
+// --- Identity for the server -----------------------------------------------------------------------
+// The player's game token: the server verifies it with Bloxity and uses only the verified id.
+export function getToken() {
+  try {
+    const t = sdk()?.auth?.getToken?.()
+    return typeof t === 'string' && t ? t : null
+  } catch {
+    return null
+  }
+}
+
+const featuresDone = new Set()
+export function registerFeature(name) {
+  if (featuresDone.has(name)) return
+  try {
+    if (!sdk()?.game?.registerFeature) return
+    sdk().game.registerFeature(name)
+    featuresDone.add(name)
+  } catch {
+    // Non-fatal.
+  }
+}
+
+// --- Party play ------------------------------------------------------------------------------------
+// Hosted matchmaking seats a party in one room by itself; the game reports where it landed.
+export function partyLaunch() {
+  try {
+    return sdk()?.party?.getLaunch?.() ?? null
+  } catch {
+    return null
+  }
+}
+export function partyJoined(roomId) {
+  try {
+    sdk()?.party?.joined?.(roomId)
+  } catch {
+    // Non-fatal.
+  }
+}
+export function partyFailed(reason) {
+  try {
+    sdk()?.party?.failed?.(reason)
+  } catch {
+    // Non-fatal.
+  }
+}
+
+// Friend-join notifications: someone joined the room / was already in it (non-friends show nothing).
+export function playerJoined(name) {
+  try {
+    sdk()?.game?.playerJoined?.(name)
+  } catch {
+    // Non-fatal.
+  }
+}
+export function playerInRoom(name) {
+  try {
+    sdk()?.game?.playerInRoom?.(name)
+  } catch {
+    // Non-fatal.
+  }
+}
+
+// --- Looks of other players ---------------------------------------------------------------------------
+// Other players' outfits travel as the outfit key (never item URLs); the character kit draws it.
+const avatarApi = () => sdk()?.avatar ?? null
+export function getOutfitKey() {
+  try {
+    const k = avatarApi()?.getOutfitKey?.()
+    return typeof k === 'string' && k ? k : ''
+  } catch {
+    return ''
+  }
+}
+export function getOutfitKeyFor(equipped) {
+  try {
+    const k = avatarApi()?.getOutfitKeyFor?.(equipped)
+    return typeof k === 'string' && k ? k : ''
+  } catch {
+    return ''
+  }
+}
+export function characterKit() {
+  try {
+    const kit = sdk()?.character
+    return kit && typeof kit.dress === 'function' && typeof kit.canDress === 'function' ? kit : null
+  } catch {
+    return null
+  }
+}
+export function getSkinTextureUrlFor(equipped) {
+  try {
+    const url = avatarApi()?.getSkinTextureUrlFor?.(equipped)
+    return typeof url === 'string' && url ? url : null
+  } catch {
+    return null
   }
 }

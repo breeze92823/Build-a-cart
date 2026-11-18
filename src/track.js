@@ -1,8 +1,10 @@
-// The five tracks and the bases at their start. Each track: two steel rails on
-// wooden sleepers following the height profile (cartPhysics.trackHeight), a
-// blue studded bed at the station, a stepped dirt embankment climbing to the
-// broken bridge over the canyon, the far landing deck, and a buffer stop at the
-// end of the line. Each base: buffer stop, the "+1 Cart" stall and pad, the
+// The five tracks and the bases at their start. Each base has its own track out
+// of the station (a blue studded bed under it) and down to the valley floor; the
+// four side tracks then curve in and join the home track (TRACK.merge), so from
+// the canyon ramp on there is one shared line: two steel rails on wooden sleepers
+// following the height profile (cartPhysics.trackHeight), a stepped dirt
+// embankment climbing to the broken bridge over the canyon, the far landing deck,
+// and a buffer stop at the end of the line. Each base: buffer stop, the "+1 Cart" stall and pad, the
 // owner's name and trip count; the home base also has the Starter Pack and
 // OP V8 display pads. Returns the interactive spots for the home base.
 import {
@@ -19,7 +21,7 @@ import {
   SpriteMaterial,
 } from 'three'
 import { BASES, BUNDLES, GEAR, TRACK } from './config.js'
-import { FLOOR_Y, LAND_Y, LIP_Y, VALLEY_Y, trackHeight, trackSlope } from './cartPhysics.js'
+import { FLOOR_Y, LAND_Y, LIP_Y, VALLEY_Y, laneX, laneXSlope, mergeK, trackHeight, trackSlope, trackX, trackXSlope } from './cartPhysics.js'
 import { RAPIER, addFixed } from './physics.js'
 import { block, group, mixHex, pillar } from './build.js'
 import { bake } from './bake.js'
@@ -36,13 +38,23 @@ const WOOD_DARK = '#6a4224'
 const SLEEPER_H = 0.18
 export const RAIL_TOP = SLEEPER_H + 0.18 // rail top above the track height
 
-// Where the rails are at s on the track starting at x: world position and pitch.
+// Where the rails are at s on the track starting at x: world position.
 export function railPoint(x, s, out) {
-  out.x = x
+  out.x = x + trackX(s)
   out.y = trackHeight(s) + RAIL_TOP
   out.z = zAt(s)
   return out
 }
+
+// The Gem Run branch beside the home track (TRACK.junction): extra sideways offset at s.
+const J = T.junction
+export function branchX(s) {
+  if (s <= J.s0 || s >= J.s1) return 0
+  const u = Math.min(1, (s - J.s0) / J.ramp, (J.s1 - s) / J.ramp)
+  return J.offset * u * u * (3 - 2 * u)
+}
+const inBend = (a, b) => T.bends.some(([s0, s1]) => b > s0 && a < s1)
+const DB = T.drawbridge
 
 // --- Rails + sleepers (instanced across all tracks) -------------------------------------
 function railPieces() {
@@ -65,39 +77,132 @@ function railPieces() {
     add(a, b, ha === hb ? 1 : Math.ceil((b - a) / 2.5))
   }
   add(H[H.length - 1][0], T.length + 1.5, 1)
+  // Bends: straight pieces would show kinks, so split those spans finely too.
+  const out = []
+  for (const [a, b] of spans) {
+    if (!inBend(a, b) || b - a <= 3) {
+      out.push([a, b])
+      continue
+    }
+    const n = Math.ceil((b - a) / 2.5)
+    for (let i = 0; i < n; i++) out.push([a + ((b - a) * i) / n, a + ((b - a) * (i + 1)) / n])
+  }
+  return out
+}
+// A rail span [a, b] laid on the track starting at x (+ extra sideways offset fn), as a matrix.
+function railMatrix(e, x, a, b, side, extra) {
+  const ya = trackHeight(a)
+  const yb = trackHeight(b)
+  const xa = x + trackX(a) + extra(a)
+  const xb = x + trackX(b) + extra(b)
+  const flat = Math.hypot(b - a, xb - xa)
+  const yaw = -Math.atan2(xb - xa, b - a)
+  const len = Math.hypot(flat, yb - ya)
+  const off = side * (T.gauge / 2)
+  e.position.set((xa + xb) / 2 + off * Math.cos(yaw), (ya + yb) / 2 + SLEEPER_H + 0.09, zAt((a + b) / 2) - off * Math.sin(yaw))
+  e.rotation.set(Math.atan2(yb - ya, flat), yaw, 0, 'YXZ')
+  e.scale.set(0.14, 0.18, len + 0.02)
+  e.updateMatrix()
+}
+const NONE = () => 0
+
+// A side base's track: [s0, s1] spans from the cave mouth to where it has joined
+// the home track (its last `JOINED` m of offset are left to the home rails, so the
+// two never overlap), split finely through the merge curve.
+const MG = T.merge
+const JOINED = 0.25
+function sideEnd(dx) {
+  return solveS((s) => Math.abs(dx) * mergeK(s) < JOINED, MG.s0, MG.s1)
+}
+function sidePieces(end) {
+  const spans = [[T.backS, T.dropStart]]
+  const add = (a, b, n) => {
+    for (let i = 0; i < n; i++) spans.push([a + ((b - a) * i) / n, a + ((b - a) * (i + 1)) / n])
+  }
+  add(T.dropStart, T.dropEnd, 14)
+  add(T.dropEnd, MG.s0, 1)
+  add(MG.s0, end, Math.ceil((end - MG.s0) / 2.2))
   return spans
 }
 
-function railsAndSleepers(root, xs) {
+function railsAndSleepers(root, xs, homeX) {
   const spans = railPieces()
+  const sides = xs.filter((x) => x !== homeX).map((x) => {
+    const end = sideEnd(x - homeX)
+    return { x, end, spans: sidePieces(end) }
+  })
+  const sideRails = sides.reduce((n, sd) => n + sd.spans.length * 2, 0)
+  const sideSleepers = sides.reduce((n, sd) => n + Math.ceil((sd.end - T.backS) / T.sleeperGap) + 1, 0)
+  const branchSpans = []
+  for (let s = J.s0; s < J.s1; s += 2.5) branchSpans.push([s, Math.min(J.s1, s + 2.5)])
+  const branchSleepers = []
+  for (let s = J.s0 + 0.6; s < J.s1; s += T.sleeperGap) if (branchX(s) > 2.2) branchSleepers.push(s)
   const railMat = new MeshStandardMaterial({ color: '#c3c8d2', roughness: 0.3, metalness: 0.85 })
-  const rails = new InstancedMesh(new BoxGeometry(1, 1, 1), railMat, spans.length * 2 * xs.length + xs.length * 4)
+  const rails = new InstancedMesh(new BoxGeometry(1, 1, 1), railMat, spans.length * 2 + 4 + sideRails + branchSpans.length * 2)
   const sleeperMat = new MeshStandardMaterial({ color: '#7a4a28', roughness: 0.9 })
   const sleeperS = []
   for (let s = T.backS + 0.5; s <= T.length + 1; s += T.sleeperGap) if (s <= T.lipS - 0.4 || s >= T.gapEnd + 0.4) sleeperS.push(s)
-  const sleepers = new InstancedMesh(new BoxGeometry(2.5, SLEEPER_H, 0.5), sleeperMat, sleeperS.length * xs.length + xs.length * 6)
+  const sleepers = new InstancedMesh(new BoxGeometry(2.5, SLEEPER_H, 0.5), sleeperMat, sleeperS.length + 6 + sideSleepers + branchSleepers.length)
   const e = new Object3D()
   let r = 0
   let k = 0
-  for (const x of xs) {
-    for (const [a, b] of spans) {
-      const ya = trackHeight(a)
-      const yb = trackHeight(b)
-      const len = Math.hypot(b - a, yb - ya)
+  // The side tracks: out of their stations, down the ramps and round into the home track.
+  sides.forEach(({ x, end, spans: sp }, i) => {
+    const dx = x - homeX
+    const extra = (s) => dx * mergeK(s)
+    for (const [a, b] of sp) {
       for (const side of [-1, 1]) {
-        e.position.set(x + side * (T.gauge / 2), (ya + yb) / 2 + SLEEPER_H + 0.09, zAt((a + b) / 2))
-        e.rotation.set(Math.atan2(yb - ya, b - a), 0, 0)
-        e.scale.set(0.14, 0.18, len + 0.02)
-        e.updateMatrix()
+        railMatrix(e, homeX, a, b, side, extra)
+        rails.setMatrixAt(r++, e.matrix)
+      }
+    }
+    // Sleepers sink a hair per track where they cross another's, so no two tops fight.
+    const sink = 0.012 * (1 + i)
+    for (let s = T.backS + 0.5; s <= end; s += T.sleeperGap) {
+      const cross = Math.abs(dx * mergeK(s)) < 3
+      e.position.set(laneX(x, homeX, s), trackHeight(s) + SLEEPER_H / 2 - (cross ? sink : 0), zAt(s))
+      e.rotation.set(Math.atan(trackSlope(s)), -Math.atan(laneXSlope(x, homeX, s)), 0, 'YXZ')
+      e.scale.set(1, 1, 1)
+      e.updateMatrix()
+      sleepers.setMatrixAt(k++, e.matrix)
+    }
+  })
+  {
+    const x = homeX
+    const home = true
+    // The home track's drawbridge span carries its own rails (route.js lifts it).
+    const gap = (a, b) => home && b > DB.s0 && a < DB.s1
+    for (const [a, b] of spans) {
+      if (gap(a, b)) continue
+      for (const side of [-1, 1]) {
+        railMatrix(e, x, a, b, side, NONE)
         rails.setMatrixAt(r++, e.matrix)
       }
     }
     for (const s of sleeperS) {
-      e.position.set(x, trackHeight(s) + SLEEPER_H / 2, zAt(s))
-      e.rotation.set(Math.atan(trackSlope(s)), 0, 0)
+      if (gap(s - 0.3, s + 0.3)) continue
+      e.position.set(x + trackX(s), trackHeight(s) + SLEEPER_H / 2, zAt(s))
+      e.rotation.set(Math.atan(trackSlope(s)), -Math.atan(trackXSlope(s)), 0, 'YXZ')
       e.scale.set(1, 1, 1)
       e.updateMatrix()
       sleepers.setMatrixAt(k++, e.matrix)
+    }
+    if (home) {
+      // The Gem Run: a second pair of rails peeling off to the right and back.
+      for (const [a, b] of branchSpans) {
+        for (const side of [-1, 1]) {
+          railMatrix(e, x, a, b, side, branchX)
+          rails.setMatrixAt(r++, e.matrix)
+        }
+      }
+      for (const s of branchSleepers) {
+        const dx = branchX(s + 0.5) - branchX(s - 0.5)
+        e.position.set(x + trackX(s) + branchX(s), trackHeight(s) + SLEEPER_H / 2, zAt(s))
+        e.rotation.set(Math.atan(trackSlope(s)), -Math.atan(dx), 0, 'YXZ')
+        e.scale.set(1, 1, 1)
+        e.updateMatrix()
+        sleepers.setMatrixAt(k++, e.matrix)
+      }
     }
     // The broken bridge: rails bent down off the lip, and drooping at the far side.
     const rand = mulberry32(Math.round(x * 13 + 400))
@@ -205,6 +310,7 @@ function raised() {
   return out
 }
 function supportStyle(s) {
+  if (s >= T.lift.s0 - 5 && s <= T.tunnels[0].s1 + 5) return 'mountain'
   if (s >= T.river.s0 - 60 && s <= T.river.s1 + 60) return 'trestle'
   if (s >= T.gorge.s0 && s < T.mine.s0) return 'trestle'
   if (s >= T.mine.s0 && s < T.mine.s1) return 'rock'
@@ -215,6 +321,7 @@ const MOUND_COLORS = {
   dirt: [DIRT, DIRT_TOP, '#4fae35'],
   sand: ['#d9a25e', '#e8bd78', '#f0cf8a'],
   rock: ['#3b3f5a', '#4a4f6e', '#4a4f6e'],
+  mountain: ['#8f99ad', '#737d92', '#e9f1ff'],
 }
 function mound(g, x, a, b, style) {
   const [body, band, top] = MOUND_COLORS[style]
@@ -241,14 +348,14 @@ function mound(g, x, a, b, style) {
     addFixed(RAPIER.ColliderDesc.cuboid(w / 2, MOUND / 2, len / 2), { x, y, z: zc })
   }
 }
-function trestle(g, x, a, b) {
+function trestle(g, x, a, b, home = false) {
   const floor = VALLEY_Y
   const step = 3.6
   let i = 0
   for (let s = Math.ceil(a / step) * step; s <= b; s += step, i++) {
     const deck = trackHeight(s)
     const h = deck - floor
-    if (h < 0.9) continue
+    if (h < 0.9 || (home && s > DB.s0 - 1 && s < DB.s1 + 1)) continue
     const z = zAt(s)
     for (const side of [-1, 1]) block(g, 0.42, h, 0.42, x + side * 1.35, floor + h / 2 - 0.05, z, WOOD_DARK, { shadow: i % 2 === 0 })
     block(g, 3.4, 0.36, 0.5, x, deck - 0.08, z, WOOD)
@@ -271,12 +378,12 @@ function trestle(g, x, a, b) {
     const s1 = a + ((b - a) * (k + 1)) / n
     const y0 = trackHeight(s0)
     const y1 = trackHeight(s1)
-    if (Math.max(y0, y1) - floor < 0.9) continue
+    if (Math.max(y0, y1) - floor < 0.9 || (home && s1 > DB.s0 && s0 < DB.s1)) continue
     const len = Math.hypot(s1 - s0, y1 - y0)
     for (const side of [-1, 1]) block(g, 0.34, 0.34, len + 0.1, x + side * 0.9, (y0 + y1) / 2 - 0.36, zAt((s0 + s1) / 2), WOOD_DARK, { pitch: Math.atan2(y1 - y0, s1 - s0), shadow: false })
   }
 }
-function supports(g, x) {
+function supports(g, x, home = false) {
   for (const [a, b] of raised()) {
     // Split each raised stretch where its style changes.
     let s0 = a
@@ -285,7 +392,7 @@ function supports(g, x) {
       const st = supportStyle(s)
       if (st !== style || s + 0.5 > b) {
         const s1 = st !== style ? s : b
-        if (style === 'trestle') trestle(g, x, s0, s1)
+        if (style === 'trestle') trestle(g, x, s0, s1, home)
         else mound(g, x, s0, s1, style)
         s0 = s1
         style = st
@@ -437,7 +544,7 @@ export function buildTracks(scene, gearById) {
   scene.add(root)
   const staticG = new Group()
   const xs = BASES.xs
-  railsAndSleepers(root, xs)
+  railsAndSleepers(root, xs, xs[BASES.home])
   const rand = mulberry32(2718)
   const bases = []
   const minis = []
@@ -449,10 +556,13 @@ export function buildTracks(scene, gearById) {
     block(staticG, 4.6, 0.1, bedLen, x, 0.05, bedZ, '#3a8cff', { shadow: false })
     for (const side of [-1, 1]) block(staticG, 0.4, 0.14, bedLen, x + side * 2.5, 0.07, bedZ, '#2a6fd6', { shadow: false })
     for (let k = 0; k < bedLen / 2; k += 2) block(staticG, 4.2, 0.02, 2, x, 0.11, zAt(T.backS + 1 + k * 2), '#5aa8ff', { shadow: false })
-    embankments(staticG, x)
-    supports(staticG, x)
     bufferStop(staticG, x, T.backS + 0.4, -1)
-    bufferStop(staticG, x, T.length + 1.6, 1)
+    // Past the merge the line is the home track's alone.
+    if (home) {
+      embankments(staticG, x)
+      supports(staticG, x, home)
+      bufferStop(staticG, x, T.length + 1.6, 1)
+    }
 
     stall(staticG, x + LAYOUT.stall[0], LAYOUT.stall[1])
     // The +1 Cart pad (glowing) with a little cart on it.
@@ -474,7 +584,20 @@ export function buildTracks(scene, gearById) {
       sign.position.set(x, 11, LAYOUT.sign[1])
       root.add(sign)
     }
-    bases.push({ x, home })
+    // A player on this base (multiplayer, remote.js): their name and trips replace OPEN BASE and the
+    // decorative parked cart makes room for their real one.
+    let ownerSign = null
+    if (!home) {
+      ownerSign = canvasSprite(768, 520, 9, (ctx, w, h, name, status) => {
+        paintHead(ctx, w / 2, 130, 210)
+        outlinedText(ctx, name, w / 2, 330, name.length > 12 ? 70 : 92, '#e8edff', '#2a3a6a', 16)
+        outlinedText(ctx, status, w / 2, 440, 78, '#4dff5a', '#0b3a14', 16)
+      })
+      ownerSign.position.set(x, 13.5, LAYOUT.sign[1])
+      ownerSign.visible = false
+      root.add(ownerSign)
+    }
+    bases.push({ x, home, parked, sign, ownerSign, shown: '' })
   })
   root.add(bake(staticG, true))
 
@@ -563,6 +686,19 @@ export function buildTracks(scene, gearById) {
     },
     setCartBar: (money, price, maxed) => cartBar.userData.redraw(money, price, maxed),
     setOwner: (name, trips) => nameSign.userData.redraw(name, trips),
+    // Base `i` (index into BASES.xs, never the home one) is taken by a player: occupant = { name, status },
+    // or null when it is free again.
+    setBaseOwner(i, occupant) {
+      const b = bases[i]
+      if (!b || b.home) return
+      const key = occupant ? `${occupant.name}|${occupant.status}` : ''
+      if (key === b.shown) return
+      b.shown = key
+      b.ownerSign.visible = !!occupant
+      if (b.sign) b.sign.visible = !occupant
+      if (b.parked) b.parked.visible = !occupant
+      if (occupant) b.ownerSign.userData.redraw(occupant.name, occupant.status)
+    },
     redrawOnFont: (fn) => fontReady.then(fn),
     update(dt, t) {
       starter.rotation.y = t * 0.6

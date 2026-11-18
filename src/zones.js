@@ -33,7 +33,8 @@ const T = TRACK
 const V = VALLEY
 const zAt = (s) => BASES.cartZ - s // (world.js has the same; imported there from here would be a cycle)
 const sAt = (z) => BASES.cartZ - z
-const XS = BASES.xs
+// Everything here is past the merge (TRACK.merge): only the home track runs this far.
+const XS = [BASES.xs[BASES.home]]
 const W = V.halfWidth + 60 // half width of the full-valley pieces
 const WOOD = '#8a5a32'
 const WOOD_DARK = '#6a4224'

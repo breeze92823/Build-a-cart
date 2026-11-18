@@ -237,7 +237,17 @@ const AMB = {
   mist: { cols: ['#f2fbff', '#d6efff'].map(C) },
   sparkle: { cols: ['#d07bff', '#4fe3ff', '#ffffff'].map(C) },
   sand: { cols: ['#f0cf8a', '#e0b26a', '#fff0c8'].map(C) },
+  snow: { cols: ['#ffffff', '#eaf4ff', '#dbe9ff'].map(C) },
+  fireflies: { cols: ['#d8ff6a', '#fff27a', '#a8ff7a'].map(C) },
 }
+// Cached colours for the route's emitters (no allocation per particle).
+const COLS = new Map()
+const col = (hex) => {
+  let c = COLS.get(hex)
+  if (!c) COLS.set(hex, (c = new Color(hex)))
+  return c
+}
+const STAR_COLS = ['#ffe066', '#ffffff', '#ffd23a'].map(C)
 const FIREWORK = ['#ff3b5c', '#ffd23a', '#3ad4ff', '#5dff6a', '#b05cff', '#ffffff'].map(C)
 
 // --- Rain + speed lines: segments recycled inside a box around the camera -------------
@@ -329,6 +339,32 @@ export function createFx(scene, quality = 1) {
         skulls.add({ x: p.x + Math.cos(a) * 1.5, y: p.y + 2, z: p.z + Math.sin(a) * 1.5, vx: Math.cos(a) * 2.5, vy: rnd(3, 6), vz: Math.sin(a) * 2.5, size: rnd(1.2, 2), life: rnd(1.6, 2.4), color: i % 2 ? C('#ff7a1a') : C('#1a0f0a'), alpha: 1, gravity: 2, drag: 1, spin: rnd(-1, 1), rot: 0 })
       }
     },
+    // Chunks flying off something: wool, leaves, rock bits, splinters, tumbleweed twigs.
+    chunks(p, n = 16, color = '#ffffff', power = 1, size = 0.3, gravity = 9) {
+      const c = col(color)
+      for (let i = 0; i < n * q; i++) {
+        const a = Math.random() * Math.PI * 2
+        const sp = rnd(1.5, 6) * power
+        confetti.add({ x: p.x, y: p.y, z: p.z, vx: Math.cos(a) * sp, vy: rnd(2, 7) * power, vz: Math.sin(a) * sp, size: rnd(0.6, 1.2) * size, life: rnd(0.9, 1.6), color: c, alpha: 1, gravity, drag: 1.4, spin: rnd(-10, 10), fadeIn: 0 })
+      }
+    },
+    // Cartoon stars circling above a dizzy head (or cart).
+    stars(p, n = 8) {
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2
+        sparks.add({ x: p.x + Math.cos(a) * 0.9, y: p.y, z: p.z + Math.sin(a) * 0.9, vx: -Math.sin(a) * 2.2, vy: rnd(0.1, 0.5), vz: Math.cos(a) * 2.2, size: rnd(0.35, 0.55), life: rnd(0.9, 1.3), color: STAR_COLS[i % 3], alpha: 1, spin: rnd(-4, 4), fadeIn: 0 })
+      }
+    },
+    // A coin / gem picked up: a burst of glints in its colour.
+    pickup(p, color = '#ffd23a', n = 10) {
+      const c = col(color)
+      for (let i = 0; i < n * q; i++) sparks.add({ x: p.x, y: p.y, z: p.z, vx: rnd(-3, 3), vy: rnd(0.5, 4), vz: rnd(-3, 3), size: rnd(0.2, 0.45), life: rnd(0.35, 0.7), color: c, alpha: 1, gravity: 4, drag: 2, fadeIn: 0 })
+    },
+    // A sideways gust of wind / sand streaming across the track at p (dir -1 / 1).
+    gust(p, dir = 1, color = '#f2fbff', n = 6, alpha = 0.22) {
+      const c = col(color)
+      for (let i = 0; i < n; i++) smoke.add({ x: p.x - dir * rnd(4, 14), y: p.y + rnd(0, 5), z: p.z + rnd(-10, 10), vx: dir * rnd(9, 16), vy: rnd(-0.3, 0.6), vz: rnd(-1, 1), size: rnd(0.8, 1.6), grow: 2, life: rnd(0.8, 1.3), color: c, alpha, drag: 0.2, fadeIn: 0.15 })
+    },
     // Celebration: confetti fountain.
     confetti(p, n = 80, power = 1) {
       const cols = ['#ff3b5c', '#ffd23a', '#3ad4ff', '#5dff6a', '#b05cff', '#ffffff']
@@ -354,6 +390,8 @@ export function createFx(scene, quality = 1) {
       else if (kind === 'spray') smoke.add({ x: p.x, y: p.y - 0.5, z: p.z, vx: rnd(-0.5, 0.5), vy: rnd(0.4, 1.2), vz: rnd(-0.5, 0.5), size: rnd(0.6, 1.1), grow: 2.2, life: rnd(1.2, 1.8), color: c, alpha: 0.22, drag: 0.6, fadeIn: 0.25 })
       else if (kind === 'mist') smoke.add({ x: p.x, y: p.y, z: p.z, vx: rnd(-1, 1), vy: rnd(-0.5, 1.5), vz: rnd(0, 2), size: rnd(2, 3.6), grow: 1.8, life: rnd(1.6, 2.4), color: c, alpha: 0.24, drag: 0.4, fadeIn: 0.25 })
       else if (kind === 'sparkle') sparks.add({ x: p.x, y: p.y, z: p.z, vx: 0, vy: rnd(-0.2, 0.2), vz: 0, size: rnd(0.05, 0.09), life: rnd(0.9, 1.5), color: c, alpha: 0.6, spin: rnd(-3, 3), fadeIn: 0.3 })
+      else if (kind === 'snow') confetti.add({ x: p.x, y: p.y + 3, z: p.z, vx: rnd(-0.6, 0.6), vy: rnd(-1.6, -0.8), vz: rnd(-0.6, 0.6), size: rnd(0.1, 0.2), life: rnd(2.2, 3.4), color: c, alpha: 0.95, gravity: 0, drag: 0.2, spin: rnd(-3, 3), fadeIn: 0.15 })
+      else if (kind === 'fireflies') sparks.add({ x: p.x, y: p.y, z: p.z, vx: rnd(-0.5, 0.5), vy: rnd(-0.2, 0.4), vz: rnd(-0.5, 0.5), size: rnd(0.12, 0.2), life: rnd(1.6, 2.6), color: c, alpha: 0.9, fadeIn: 0.4 })
       else if (kind === 'sand') smoke.add({ x: p.x, y: p.y - 1, z: p.z, vx: rnd(3, 7), vy: rnd(-0.2, 0.4), vz: rnd(-1, 1), size: rnd(0.3, 0.6), grow: 2.5, life: rnd(1.2, 1.8), color: c, alpha: 0.32, drag: 0.3, fadeIn: 0.2 })
     },
     // Bursting through the waterfall: a cloud of spray and droplets.

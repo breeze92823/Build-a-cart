@@ -62,7 +62,10 @@ export function createHud(actions) {
   sideBtn('saves', 'SAVES')
   shopB.querySelector('.badge').textContent = 'NEW!'
   shopB.querySelector('.badge').classList.add('on')
-  left.append(offer, side)
+  // Rewarded ad: 2x cash for a while (Bloxity only: hidden when no ad can be shown).
+  const adBtn = tap(el('button', 'ad-btn'), () => actions.adBoost())
+  adBtn.style.display = 'none'
+  left.append(offer, side, adBtn)
 
   // --- Money, hotbar, toasts, banner -------------------------------------------------
   const money = el('div', 'money', '$ 0')
@@ -80,7 +83,8 @@ export function createHud(actions) {
   const info = el('div', 'run-info')
   const runCash = el('div', 'run-cash', '+$0')
   const runDist = el('div', 'run-dist stroke', 'Distance: 0')
-  info.append(runCash, el('br'), runDist)
+  const runCoins = el('div', 'run-coins stroke', '')
+  info.append(runCash, el('br'), runDist, runCoins)
   const gauges = el('div', 'gauges')
   const speedNum = el('div', 'speed-num stroke', '0 studs/s')
   const speedBar = el('div', 'bar speedbar', '<div class="fill"></div><span class="stroke">SPEED</span>')
@@ -115,17 +119,57 @@ export function createHud(actions) {
   }
   pedal('gas', 'GAS', 'gas')
   pedal('brake', 'BRAKE', 'brake')
+  // Lean buttons (touch): hold to lean the cart into a bend, tap to pick a lane.
+  const leanBtn = (cls, label, dir) => {
+    const p = el('button', `lean-btn ${cls} stroke`, label)
+    const set = (on) => {
+      p.classList.toggle('held', on)
+      actions.lean(dir, on)
+    }
+    p.addEventListener('pointerdown', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      try {
+        p.setPointerCapture(e.pointerId)
+      } catch {
+        // Fine without capture.
+      }
+      set(true)
+    })
+    for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) p.addEventListener(ev, () => set(false))
+    pedals.appendChild(p)
+  }
+  leanBtn('left', '&#9664;', -1)
+  leanBtn('right', '&#9654;', 1)
   const zoneCard = el('div', 'zone-card')
   const airPop = el('div', 'air-pop stroke')
-  ride.append(info, zoneCard, airPop, gauges, boostBtn, hint, pedals)
+  // Bonus pops (coins, skill bonuses): a few that take turns so quick ones don't cut each other off.
+  const pops = [0, 1, 2].map(() => el('div', 'bonus-pop stroke'))
+  let popI = 0
+  // The lean meter: a half dial, green in the middle, red at the ends, and a needle.
+  const leanMeter = el(
+    'div',
+    'lean-meter',
+    `<svg viewBox="0 0 120 66" aria-hidden="true"><path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="#e8333a" stroke-width="12"/><path d="M24.6 24.6 A50 50 0 0 1 95.4 24.6" fill="none" stroke="#ffc21a" stroke-width="12"/><path d="M42 13 A50 50 0 0 1 78 13" fill="none" stroke="#3ad44a" stroke-width="12"/><g class="needle"><path d="M60 60 L60 16" stroke="#fff" stroke-width="5" stroke-linecap="round"/><circle cx="60" cy="60" r="6" fill="#fff"/></g></svg><b class="stroke">A &#9664; LEAN &#9654; D</b>`,
+  )
+  const needle = leanMeter.querySelector('.needle')
+  const bendSign = el('div', 'bend-sign stroke')
+  const alertBox = el('div', 'hz-alert stroke')
+  const junction = el('div', 'junction')
+  const jL = tap(el('button', 'j-btn left stroke', '&#9664; SAFE<small>hold A</small>'), () => actions.lane(-1))
+  const jR = tap(el('button', 'j-btn right stroke', 'GEM RUN &#9654;<small>hold D</small>'), () => actions.lane(1))
+  junction.append(jL, jR)
+  ride.append(info, zoneCard, airPop, ...pops, alertBox, bendSign, junction, leanMeter, gauges, boostBtn, hint, pedals)
 
   // --- Crash -------------------------------------------------------------------------
   const crash = el('div', 'crash')
   const count = el('div', 'count stroke', '5')
   const crow = el('div', 'row')
   const revive = tap(el('button', 'revive', 'REVIVE<small>$0</small>'), () => actions.revive())
+  const adRevive = tap(el('button', 'revive ad', 'FREE REVIVE<small>Watch an ad</small>'), () => actions.adRevive())
+  adRevive.style.display = 'none'
   const restart = tap(el('button', 'restart', 'RESTART'), () => actions.restart())
-  crow.append(revive, restart)
+  crow.append(revive, adRevive, restart)
   crash.append(count, crow)
 
   root.append(top, left, money, hotbar, toasts, banner, ride, crash)
@@ -205,6 +249,57 @@ export function createHud(actions) {
     },
     resetRun() {
       lastRunCash = -1
+      runCoins.textContent = ''
+      leanMeter.classList.remove('on')
+      bendSign.classList.remove('on')
+      alertBox.classList.remove('on')
+      junction.classList.remove('on')
+    },
+    // Coins picked up this run.
+    coins(n) {
+      runCoins.textContent = n ? `COINS x${n}` : ''
+      runCoins.classList.remove('pop')
+      void runCoins.offsetWidth
+      runCoins.classList.add('pop')
+    },
+    // A floating bonus line: text, colour, size (1 = normal, 1.4 = big).
+    pop(text, color = '#ffe066', size = 1) {
+      const p = pops[popI++ % pops.length]
+      p.textContent = text
+      p.style.color = color
+      p.style.setProperty('--ps', size)
+      p.style.setProperty('--py', `${(popI % 3) * 4.2}`)
+      p.classList.remove('on')
+      void p.offsetWidth
+      p.classList.add('on')
+    },
+    // tip: -1..1 past the edge (see LEAN), lean: the rider's lean, show: whether the dial is up.
+    lean(tip, show) {
+      leanMeter.classList.toggle('on', show)
+      if (!show) return
+      const a = Math.max(-1.15, Math.min(1.15, tip)) * 80
+      needle.setAttribute('transform', `rotate(${a.toFixed(1)} 60 60)`)
+      leanMeter.classList.toggle('danger', Math.abs(tip) > 1)
+    },
+    // Bend ahead: "MAX 23" (null hides it); hot = going too fast for it.
+    bend(text, hot) {
+      bendSign.classList.toggle('on', !!text)
+      if (!text) return
+      if (bendSign.textContent !== text) bendSign.textContent = text
+      bendSign.classList.toggle('hot', !!hot)
+    },
+    // A persistent hazard alert ("STOP! ANIMALS CROSSING"); null hides it. kind: 'stop' | 'go' | 'info'.
+    alert(text, kind = 'stop') {
+      alertBox.classList.toggle('on', !!text)
+      if (!text) return
+      if (alertBox.textContent !== text) alertBox.textContent = text
+      alertBox.dataset.kind = kind
+    },
+    // The junction chooser: sel -1 safe / 1 gem run / 0 none yet; null hides it.
+    junction(sel) {
+      junction.classList.toggle('on', sel !== null)
+      jL.classList.toggle('sel', sel === -1)
+      jR.classList.toggle('sel', sel === 1)
     },
     // An area's title card sweeping in under the distance.
     zone(name, sub, color, fresh) {
@@ -245,13 +340,24 @@ export function createHud(actions) {
       speedFx.classList.toggle('boost', !!boost)
       speedFx.classList.toggle('on', sk > 0.01 || dark > 0.01 || !!boost)
     },
-    showCrash(on, seconds = 0, price = 0, affordable = true) {
+    // opts: { wait } while the portal's death-screen countdown runs (nothing may respawn yet), { ad } shows
+    // the rewarded-ad revive.
+    showCrash(on, seconds = 0, price = 0, affordable = true, opts = {}) {
       crash.classList.toggle('on', on)
       root.classList.toggle('crashed', on)
       if (!on) return
-      count.textContent = String(Math.ceil(seconds))
+      const wait = !!opts.wait
+      count.textContent = wait ? String(Math.ceil(seconds)) : opts.hold ? 'READY' : String(Math.ceil(seconds))
       revive.querySelector('small').textContent = fmt(price)
-      revive.disabled = !affordable
+      revive.disabled = !affordable || wait
+      adRevive.style.display = opts.ad ? '' : 'none'
+      adRevive.disabled = wait
+      restart.disabled = wait
+    },
+    // The rewarded-ad button on the left ('' hides it): text = the small line under WATCH AD.
+    setAdOffer(text) {
+      adBtn.style.display = text ? '' : 'none'
+      if (text) adBtn.innerHTML = `<b class="stroke">WATCH AD</b><small class="stroke">${text}</small>`
     },
     // items: [{ id, name, count, img }]; held: the id in hand (or null).
     setHotbar(items, held) {

@@ -12,11 +12,24 @@
 // Never throws and never blocks play: without a server the game runs on the browser save.
 import { Client } from '@colyseus/sdk'
 import { DEV_MODE, NET, SERVER_URL } from './config.js'
-import { hydrate, setSaver, setSchedule, snapshot } from './state.js'
+import { hydrate, onChange, setSaver, setSchedule, snapshot } from './state.js'
 import { setServerTime } from './clock.js'
-import { authState, canResolveServer, getPfp, launchRoomId, locateRoom, resolveServerEndpoint, subscribeAuth, updateRoom } from './bloxity.js'
+import { authState, canResolveServer, getEquippedAvatar, getOutfitKey, getPfp, getProportions, getToken, launchRoomId, locateRoom, onAvatarChanged, onProportionsChanged, partyFailed, partyJoined, partyLaunch, resolveServerEndpoint, subscribeAuth, updateRoom } from './bloxity.js'
+import { lookToJson } from './avatar/look.js'
 
-export const net = { room: null, connected: false, hydrated: false }
+// The room: `players` is the synced roster (Map sessionId -> PlayerState, see the backend's
+// WorldState), `sessionId` is ours in it. remote.js draws everyone else from it.
+export const net = {
+  room: null,
+  connected: false,
+  hydrated: false,
+  get sessionId() {
+    return this.room?.sessionId ?? null
+  },
+  get players() {
+    return this.room?.state?.players ?? null
+  },
+}
 
 // --- Identity ---------------------------------------------------------------------
 // Signed-in players use their Bloxity id; everyone else a per-browser guest id (never saved on
@@ -33,7 +46,9 @@ function storedId(key, make) {
 }
 const rand = () => Math.random().toString(36).slice(2, 8)
 const GUEST = storedId('build-a-cart.guest', () => `guest-${rand()}`)
-const DEV = DEV_MODE ? storedId('build-a-cart.dev', () => `dev-${rand()}`) : ''
+// Dev mode: `?dev=<name>` plays as dev-<name> (two tabs of one browser need two ids to meet in a room).
+const devParam = DEV_MODE ? new URLSearchParams(location.search).get('dev') : ''
+const DEV = DEV_MODE ? (devParam ? `dev-${devParam.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20)}` : storedId('build-a-cart.dev', () => `dev-${rand()}`)) : ''
 
 function identity() {
   if (DEV) return { userId: DEV, username: `Dev ${DEV.slice(4)}` }
@@ -44,9 +59,27 @@ function identity() {
 }
 const isGuestId = (id) => id.startsWith('guest-')
 
+// What this client tells the server about itself, in the join options and `identify`: the Bloxity game
+// token (the server verifies it and uses only the id Bloxity returns), the dev id (local dev only), the
+// look (ids + outfit key, never URLs) and the display name.
+function lookFields() {
+  const signed = !!authState.user
+  return {
+    avatar: signed ? lookToJson(getEquippedAvatar(), getProportions()) : '',
+    outfit: signed ? getOutfitKey() : '',
+  }
+}
+function who() {
+  const id = identity()
+  return { ...id, token: getToken(), ...(DEV && { devId: DEV }), pfp: getPfp(), ...lookFields() }
+}
+
 // --- Browser save (guests, or no server) -------------------------------------------
 export const hasServer = () => !!(SERVER_URL || canResolveServer())
-const keepsLocal = () => !net.connected || isGuestId(sentId || identity().userId)
+// The server only saves players it could verify (a Bloxity token, or the dev id locally): when it
+// reports us as a guest the progress stays in this browser, whatever id we sent.
+const serverSaves = () => net.room?.state?.players?.get?.(net.room?.sessionId)?.signedIn !== false
+const keepsLocal = () => !net.connected || isGuestId(sentId || identity().userId) || !serverSaves()
 function localLoad() {
   try {
     const raw = localStorage.getItem(NET.localSave)
@@ -81,7 +114,7 @@ function send(type, payload) {
   }
 }
 function serverSave() {
-  if (!net.connected || !net.hydrated || isGuestId(sentId)) return
+  if (!net.connected || !net.hydrated || isGuestId(sentId) || !serverSaves()) return
   const snap = JSON.stringify(snapshot())
   if (snap === lastSaved) return
   lastSaved = snap
@@ -90,7 +123,12 @@ function serverSave() {
 // Saves where the current identity's progress lives. A signed-in player who is not connected
 // (yet) also keeps a browser copy, so a reload before the server answers loses nothing.
 // Dev mode keeps a browser copy as well: a local backend usually has no MongoDB.
+// The browser tests (src/devtests) play with a throw-away save: while paused nothing is written
+// to this browser or the server, so the real progress is never overwritten.
+let savePaused = false
+export const setSavePaused = (on) => (savePaused = on)
 export function saveNow() {
+  if (savePaused) return
   dirty = false
   if (keepsLocal() || DEV) localSave()
   if (!keepsLocal()) serverSave()
@@ -120,6 +158,27 @@ function request(type, payload, answer) {
 export const rerollQuests = (kind, keep) => request('rerollQuests', { kind, keep }, 'questsResult')
 // A quest countdown reached zero: the server rolls the new period and answers `quests`.
 export const refreshQuestSchedule = () => net.connected && net.hydrated && send('questsRefresh', {})
+
+// A rewarded ad finished: the server checks its token with Bloxity. Resolves true only when it says
+// so; with no server to ask (guest on an offline session) the client's own 'completed' is all there is.
+export async function verifyAdReward(rewardToken) {
+  if (!net.connected) return true
+  if (!rewardToken) return true // no token (not inside Bloxity): nothing to verify
+  const r = await request('adReward', { rewardToken }, 'adReward')
+  return r.ok === true || r.reason === 'offline' || r.reason === 'timeout' // only a refusal withholds it
+}
+
+// --- Presence (what the other players draw: remote.js) --------------------------------------------
+// All of these are fire-and-forget and bounded again by the server; they never throw.
+export const sendPose = (pose) => net.connected && send('pose', pose)
+export const sendCart = (cart) => net.connected && send('cart', cart)
+export const sendLoadout = (loadout) => net.connected && send('loadout', loadout)
+export const sendEmote = (id) => net.connected && send('emote', { id })
+export function sendLook() {
+  if (!net.connected) return
+  const { avatar, outfit } = lookFields()
+  send('setAvatar', { avatar, outfit })
+}
 
 // --- Connection -------------------------------------------------------------------
 function attach(room) {
@@ -154,6 +213,7 @@ function attach(room) {
     setServerTime(r?.serverTime)
     waiting.questsResult?.(r)
   })
+  room.onMessage('adReward', (r) => waiting.adReward?.(r))
   // Messages this client doesn't use yet (the backend's wheel/daily/leaderboard systems).
   for (const type of ['spins', 'daily', 'leaderboard']) room.onMessage(type, (m) => setServerTime(m?.serverTime))
   room.onLeave(() => {
@@ -162,8 +222,23 @@ function attach(room) {
     net.connected = false
     net.hydrated = false
     updateRoom('')
+    for (const fn of leaveListeners) fn()
     setTimeout(connect, NET.rejoin * 1000)
   })
+  for (const fn of joinListeners) fn(room)
+}
+
+// remote.js / presence.js: fn(room) after every (re)join, fn() when the room closed.
+const joinListeners = new Set()
+const leaveListeners = new Set()
+export function onJoinedRoom(fn) {
+  joinListeners.add(fn)
+  if (net.room) fn(net.room)
+  return () => joinListeners.delete(fn)
+}
+export function onLeftRoom(fn) {
+  leaveListeners.add(fn)
+  return () => leaveListeners.delete(fn)
 }
 
 let launchRoom = launchRoomId()
@@ -194,11 +269,16 @@ async function connect() {
   try {
     const id = identity()
     sentId = id.userId
-    const { room, relay } = (await joinLaunchRoom({ ...id, pfp: getPfp() })) ?? (await joinAnyRoom({ ...id, pfp: getPfp() }))
+    const options = { ...who(), ...(joinHook?.() ?? {}) }
+    const { room, relay } = (await joinLaunchRoom(options)) ?? (await joinAnyRoom(options))
     retryIn = NET.retry
     attach(room)
     updateRoom(relay ? `${relay}~${room.roomId}` : room.roomId)
+    // Friends who launched together were seated in one room by the matchmaker: report where it landed.
+    if (partyLaunch()) partyJoined(room.roomId)
   } catch (err) {
+    // A full room (5 seats) of a party that was meant to stay together: say so.
+    if (partyLaunch() && /full|locked/i.test(String(err?.message ?? err))) partyFailed('room-full')
     console.info(`[net] could not reach the server (retrying in ${retryIn}s); playing on the browser save`, err?.message ?? err)
     setTimeout(connect, retryIn * 1000)
     retryIn = Math.min(retryIn * 2, NET.retryMax)
@@ -220,6 +300,9 @@ export function initNet() {
   const local = localLoad()
   if (local) hydrate(local)
   setSaver(() => (dirty = true))
+  // A Save Slot is the player's built cart: write it (and a freshly unlocked slot) to the server
+  // at once instead of waiting for the debounce, so closing the tab right after never loses it.
+  onChange((what) => (what === 'loadout' || what === 'slots') && saveNow())
   window.addEventListener('pagehide', saveNow)
   document.addEventListener('visibilitychange', () => document.hidden && saveNow())
   if (!hasServer()) return console.info('[net] no server configured; progress is kept in this browser')
@@ -227,7 +310,7 @@ export function initNet() {
     if (!s.ready && !DEV) return
     if (!net.connected) return void connect()
     const id = identity()
-    if (id.userId === sentId) return send('identify', { username: id.username, pfp: getPfp() })
+    if (id.userId === sentId) return send('identify', { username: id.username, pfp: getPfp(), ...lookFields() })
     // Save under the OLD identity before switching (auth has already moved on).
     if (isGuestId(sentId)) localSave()
     else serverSave()
@@ -235,6 +318,14 @@ export function initNet() {
     // Signed out: back to this browser's guest save (the account's progress stays on the server).
     if (isGuestId(id.userId)) hydrate(localLoad())
     sentId = id.userId
-    send('identify', { userId: id.userId, username: id.username, pfp: getPfp() })
+    send('identify', who())
   })
+  // A new look (the portal's avatar editor) goes to the others.
+  onAvatarChanged(sendLook)
+  onProportionsChanged(sendLook)
 }
+
+// presence.js adds its own join options (the current pose and loadout, so the others draw the newcomer
+// at once): hook() -> { pose, loadout }.
+let joinHook = null
+export const setJoinHook = (fn) => (joinHook = fn)

@@ -1,5 +1,5 @@
 import { ACESFilmicToneMapping, Clock, Group, PCFSoftShadowMap, PerspectiveCamera, Scene, SRGBColorSpace, Vector3, WebGLRenderer } from 'three'
-import { BASES, BUNDLES, CAMERA, ECONOMY, GEAR, graphicsPreset, RENDER, SPAWN, SPAWN_FACING, WHEEL } from './config.js'
+import { ADS, BASES, BUNDLES, CAMERA, CART, ECONOMY, GEAR, graphicsPreset, RENDER, SPAWN, SPAWN_FACING, WHEEL } from './config.js'
 import * as bloxity from './bloxity.js'
 import { inputState, install as installInput, onKey } from './input.js'
 import { installTouch } from './touch.js'
@@ -11,6 +11,7 @@ import * as physics from './physics.js'
 import { createLighting } from './lighting.js'
 import { createWorld } from './world.js'
 import { createZones } from './zones.js'
+import { createRoute } from './route.js'
 import { buildTracks, fmt } from './track.js'
 import { buildCave, clock } from './cave.js'
 import { buildOutside } from './outside.js'
@@ -26,10 +27,14 @@ import { createEvents } from './events.js'
 import { createHud } from './ui/hud.js'
 import { initThumbs, thumb } from './ui/thumbs.js'
 import * as W from './ui/windows.js'
-import { initNet, refreshQuestSchedule } from './net.js'
+import { initNet, net, refreshQuestSchedule, sendEmote } from './net.js'
 import { addSpot, updateInteract } from './interact.js'
 import { createCarry } from './carry.js'
-import { installAudio, sfx, updateAudio } from './audio/index.js'
+import { installAudio, sfx, setAdMuted, setVolume, updateAudio } from './audio/index.js'
+import { createRemotePlayers } from './remote.js'
+import { createPresence } from './presence.js'
+import { createEmotePlayer } from './avatar/emotes.js'
+import { adsReady, watchAd, watchForCashBoost } from './ads.js'
 
 // Boot order: Bloxity SDK -> renderer -> Rapier -> world (valley, cave, tracks),
 // player body -> avatar (async) -> game (state, HUD, ride, fx, audio) -> loop.
@@ -40,6 +45,7 @@ let fx = null
 
 function applySetting(key, value) {
   if (key === 'camera_sensitivity') setCameraSensitivity(value)
+  else if (key === 'master_volume') setVolume(value / 100)
   else if (key === 'fullscreen') bloxity.requestFullscreen(value)
   else if (key === 'graphics_quality' && renderer) {
     const next = graphicsPreset(value)
@@ -90,6 +96,7 @@ bloxity.loadingStep('Building the valley')
 lighting = createLighting(scene, renderer, preset)
 const world = createWorld(scene)
 const zones = createZones(scene)
+const route = createRoute(scene)
 const tracks = buildTracks(scene, S.gearById)
 const cave = buildCave(scene)
 buildOutside(scene)
@@ -103,12 +110,14 @@ let avatar = null
 let animator = null
 let generation = 0
 let avatarReady = false
+const emote = createEmotePlayer()
 function setAvatar(next) {
   if (avatar) playerGroup.remove(avatar)
   disposeAnimator(animator)
   avatar = next
   playerGroup.add(avatar)
   animator = makeAnimator(avatar)
+  emote.setAvatar(avatar, animator)
 }
 setAvatar(buildDefaultCharacter())
 async function loadAvatar() {
@@ -136,6 +145,24 @@ bloxity.subscribeAuth((s) => {
 })
 bloxity.onAvatarChanged(loadAvatar)
 bloxity.onProportionsChanged(() => applyProportions(avatar, bloxity.getProportions()))
+
+// Portal emotes (the emote picker): played on the local avatar, sent to the room so the others see them.
+emote.onChange((id) => sendEmote(id))
+bloxity.onPortalEmote((id) => (id ? emote.play(id) : emote.stop()))
+
+// Chat bubbles (Bloxity chat): the local player's float over their own avatar, the others' over theirs
+// (remote.js matches the verified Bloxity id).
+let remotes = null
+let myBubble = null
+bloxity.onChatMessage((m) => {
+  if (!m.isLocal) return void remotes?.say(m.userId, m.text)
+  try {
+    myBubble?.remove?.()
+  } catch {
+    // Already gone.
+  }
+  myBubble = bloxity.attachChatBubble(playerGroup, m.text, 2.6)
+})
 
 let playerHidden = false
 onModeChanged((mode) => {
@@ -198,16 +225,34 @@ const hud = createHud({
   hold: (id) => carry.hold(id),
   boost: () => ride.boost(),
   pedal: (k, on) => ride.pedal(k, on),
+  lean: (dir, on) => ride.leanButton(dir, on),
+  lane: (dir) => ride.lane(dir),
   revive: () => ride.revive(),
   restart: () => ride.restart(),
+  // Rewarded ads (Bloxity only; the buttons stay hidden without an ad to show).
+  adRevive: async () => {
+    if (await watchAd(ADS.revive)) ride.revive(true)
+    else hud.toast('No ad right now, try again in a minute', 'bad')
+  },
+  adBoost: async () => {
+    const got = await watchForCashBoost()
+    if (got) {
+      sfx.prize(false)
+      hud.toast(`2x Cash for ${Math.round(got / 60)} minutes!`, 'gold')
+      celebrate()
+      refreshAll()
+    } else hud.toast('No ad right now, try again in a minute', 'bad')
+  },
 })
 W.initWindows({
   toast: hud.toast,
   fx: { celebrate },
   onOpen: (name) => {
     if (name === 'quests') questNews = false
+    bloxity.showAdScreen('menu') // screen ads (Bloxity): menus only, never over the ride
     refreshAll()
   },
+  onClose: () => bloxity.showAdScreen(null),
 })
 // Quest and quest-level notices.
 let questNews = false
@@ -224,7 +269,21 @@ S.onNotice((kind, d) => {
   }
   refreshAll()
 })
-ride = createRide(scene, { hud, fx, player: playerApi, camera: { setRide, rideState, kick: kickCamera }, events })
+ride = createRide(scene, { hud, fx, player: playerApi, camera: { setRide, rideState, kick: kickCamera }, events, lighting, adReady: adsReady })
+// The other players of the room (up to 4 more): their carts on the other bases and on the shared line.
+remotes = createRemotePlayers(scene, { fx, tracks })
+const presence = createPresence({ ride })
+const remoteVecs = [new Vector3(), new Vector3(), new Vector3()]
+// An ad break (Bloxity): freeze the game and mute it until the portal says it is over.
+bloxity.onAdBreak((on) => {
+  setAdMuted(on)
+  paused = on
+  if (!on) clockT.getDelta() // the break is not game time
+})
+// No server (offline play inside the portal): submit the best distance to the portal's board ourselves.
+S.onChange((what) => {
+  if (what === 'run' && !net.connected) bloxity.submitScore('best', S.state.stats.best)
+})
 // Bought engines / fuel tanks: hotbar -> in hand -> hold E at the cart to attach.
 const hand = new Group()
 playerGroup.add(hand)
@@ -251,13 +310,13 @@ addSpot({
   hold: 0.6,
   enabled: () => state().wagons < ECONOMY.maxWagons,
   title: () => '+1 Cart',
-  sub: () => (state().cash >= S.wagonPrice() ? `Buy for ${fmt(S.wagonPrice())} · +${Math.round(ECONOMY.wagonCash * 100)}% cash` : `Need ${fmt(S.wagonPrice())}`),
+  sub: () => (state().cash >= S.wagonPrice() ? `Buy for ${fmt(S.wagonPrice())} · +${Math.round(ECONOMY.wagonCash * 100)}% cash, +${Math.round(CART.wagonFuel * 100)}% fuel` : `Need ${fmt(S.wagonPrice())}`),
   deny: () => state().cash < S.wagonPrice(),
   action: () => {
     const r = S.buyWagon()
     if (r === 'ok') {
       sfx.purchase()
-      hud.toast(`+1 Cart! Run cash x${(1 + state().wagons * ECONOMY.wagonCash).toFixed(1)}`, 'gold')
+      hud.toast(`+1 Cart! Run cash x${(1 + state().wagons * ECONOMY.wagonCash).toFixed(1)}, fuel +${Math.round(state().wagons * CART.wagonFuel * 100)}%`, 'gold')
       celebrate()
     } else {
       sfx.deny()
@@ -430,6 +489,7 @@ bloxity.onRespawnRequest(respawnHome)
 
 // --- Loop -------------------------------------------------------------------------------------
 const clockT = new Clock()
+let paused = false
 let shownLoading = true
 let readySince = 0
 let slowTick = 0
@@ -439,7 +499,9 @@ const camPos = new Vector3()
 let welcome = false
 
 // One frame. forceDt (dev: __game.frame) steps it by a fixed time, e.g. while the tab is hidden.
-function frame(forceDt) {
+// draw = false (the browser tests' fast mode) steps everything but skips the GPU render.
+function frame(forceDt, draw = true) {
+  if (paused && forceDt === undefined) return // an ad break is playing
   const dt = forceDt ?? Math.min(clockT.getDelta(), 0.1)
   const t = clockT.elapsedTime
   events.update(dt)
@@ -463,10 +525,16 @@ function frame(forceDt) {
     turn: 0,
     carry: !!carry.held && !ride.riding,
   })
+  emote.update(gdt, ride.riding ? 0 : Math.hypot(player.velocity.x, player.velocity.z), ride.riding ? true : player.grounded)
 
   updateCamera(camera, dt)
   world.update(dt, events.storm(), events.wind())
   zones.update(dt)
+  camera.getWorldPosition(camPos)
+  // The other players of the room, and what we tell them.
+  remotes.update(dt, t, camPos, p, remoteVecs)
+  presence.update(dt)
+  route.update(dt, t, camPos.z, ride.cartS, ride.riding, lighting.nightLevel())
   tracks.update(dt, t)
   cave.update(dt, t)
   updateWheel(dt)
@@ -508,6 +576,8 @@ function frame(forceDt) {
       if (!questRoll) refreshQuestSchedule()
       questRoll = true
     } else questRoll = false
+    // The rewarded-ad button: only inside Bloxity, only while there is no ad boost running.
+    hud.setAdOffer(adsReady() && S.cashBoostLeft() <= 0 && !ride.riding ? ADS.boost.hint : '')
     cave.setGift(S.giftLeft() <= 0, S.giftLeft(), ECONOMY.dailyGift)
     const mult = S.cashMultiplier(events.cash())
     hud.setCash(S.state.cash, mult > 1.01 ? `x${mult.toFixed(1)}` : '')
@@ -518,7 +588,7 @@ function frame(forceDt) {
     }
   }
 
-  postfx.render()
+  if (draw) postfx.render()
 
   if (shownLoading) {
     readySince += dt
@@ -548,5 +618,8 @@ if (import.meta.env.DEV) {
     inputState.look.dy += dy
     inputState.zoom += zoom
   }
-  window.__game = { look, player, scene, renderer, camera, postfx, bodies: bodyCount, toggleMode, teleport, ride, carry, state: S.state, S, W, events, fx, cave, tracks, zones, BASES, frame }
+  window.__game = { look, player, scene, renderer, camera, postfx, bodies: bodyCount, toggleMode, teleport, ride, carry, state: S.state, S, W, events, fx, cave, tracks, zones, BASES, frame, remotes, emote }
+  // In-browser player tests (src/devtests): open http://localhost:<port>/?tests (add =run to start at once).
+  // The loop is handed over so the tests can step frames by hand and put it back afterwards.
+  import('./devtests/index.js').then((m) => m.installTests({ game: window.__game, loop: () => frame(), params: new URLSearchParams(location.search) }))
 }

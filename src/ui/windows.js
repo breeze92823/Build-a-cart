@@ -94,10 +94,12 @@ let current = null // { name, render, tick, scrollSel }
 let toast = () => {}
 let fx = { celebrate() {} }
 let onOpen = () => {}
+let onClose = () => {}
 export function initWindows(opts) {
   toast = opts.toast
   fx = opts.fx
   onOpen = opts.onOpen ?? onOpen
+  onClose = opts.onClose ?? onClose
 }
 export const isWindowOpen = () => !!current
 export const openName = () => current?.name ?? ''
@@ -120,6 +122,7 @@ export function closeWindow() {
   shade.classList.remove('on')
   body.replaceChildren()
   sfx.windowClose()
+  onClose()
 }
 function redraw() {
   if (!current) return

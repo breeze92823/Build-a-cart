@@ -164,6 +164,7 @@ export const SETTINGS = {
   camera_sensitivity: { def: '1', type: 'number', min: 0.1, max: 5 },
   show_fps: { def: 'false', type: 'bool' },
   fullscreen: { def: 'false', type: 'bool' },
+  master_volume: { def: '80', type: 'number', min: 0, max: 100 },
 }
 
 // The base rig, measured from player.glb: origin at the feet, 6.4 units tall at bind pose.
@@ -274,7 +275,7 @@ export function coerceSetting(key, raw) {
 export const VALLEY = {
   halfWidth: 190, // x of the cliff faces either side of the valley
   back: 130, // z of the back edge (behind the cave mountain)
-  front: -3580, // z of the far end, past Golden Station
+  front: -3350, // z of the far end, past Golden Station
   cliffHeight: [34, 64], // m, random per cliff block
   grass: '#3fa82a',
   grassDark: '#348f22',
@@ -293,13 +294,14 @@ export const CAVE = {
   outer: '#8f99ad', // mountain outside
   outerDark: '#737d92',
 }
-// Five bases in a row in front of the cave, one track each. The player owns `home`.
+// Five bases in a row in front of the cave, one track each (they merge into the home
+// track before the canyon, TRACK.merge). The player owns `home`.
 export const BASES = { xs: [-76, -38, 0, 38, 76], home: 2, cartZ: -8 }
 
 // One track profile shared by every base. s = metres along the rails from the
 // cart's resting spot (z = BASES.cartZ - s). Heights are above the valley floor.
 export const TRACK = {
-  length: 3460, // buffer stop at the end of the line (Golden Station)
+  length: 3230, // buffer stop at the end of the line (Golden Station)
   backS: -21, // the rails start here, at the cave mouth behind the cart
   stationLength: 36, // blue studded bed under the rails on the base plateau
   // The bases sit on plateaus at y = 0; the valley floor is valleyDrop lower. The
@@ -307,66 +309,89 @@ export const TRACK = {
   valleyDrop: 2.5,
   dropStart: 42,
   dropEnd: 74,
-  rampStart: 470, // the dirt embankment climbs from here...
-  lipS: 540, // ...to the broken bridge end
+  rampStart: 240, // the dirt embankment climbs from here...
+  lipS: 310, // ...to the broken bridge end
   lipHeight: 12, // m above the valley at the lip
-  gapEnd: 592, // far side of the canyon
+  gapEnd: 362, // far side of the canyon
   landHeight: 8, // far side deck height
-  landFlat: 604, // far deck is level until here, then slopes down...
-  landEnd: 690, // ...to the valley floor here
+  landFlat: 374, // far deck is level until here, then slopes down...
+  landEnd: 460, // ...to the valley floor here
+  // The side bases' tracks curve in and join the home track between s0 and s1, so
+  // from the canyon ramp to the end of the line there is one shared track.
+  merge: { s0: 84, s1: 226 },
   canyonFloor: -34, // spikes down there
   canyonHalfWidth: 260, // x extent of the canyon (it cuts the whole valley)
   gauge: 1.5, // m between the rails
   sleeperGap: 1.25,
-  archS: 1550, // the Great Arch: the gate from the valley into the new areas
+  archS: 1320, // the Great Arch: the gate from the valley into the new areas
   // Past the far deck the profile is a chain of key points [s, height above the
   // valley floor] joined by smoothsteps (level at every key point). Over a crest
   // a fast cart leaves the rails (airtime) and lands further down.
   hills: [
-    [690, 0],
-    [1600, 0], // Bumpy Meadows: three humps, each bigger
-    [1640, 4],
-    [1680, 0],
-    [1730, 6],
-    [1780, 0],
-    [1840, 8],
-    [1900, 0],
-    [2040, 0], // Crystal River: a low bridge over the water
-    [2085, 2],
-    [2145, 2],
-    [2190, 0],
-    [2260, 0], // Waterfall Gorge: the Sky Trestle climbs...
-    [2400, 34],
-    [2540, 34], // ...runs high over the lake...
-    [2620, 4], // ...and plunges to the falls
-    [2700, 4], // Glow Mine: through the falls into the mountain, a dip inside
-    [2780, 0],
-    [3100, 0], // Golden Sands: two last humps
-    [3140, 5],
-    [3180, 0],
-    [3230, 7],
-    [3290, 0],
+    [460, 0],
+    [1000, 0], // Mountain Pass: the chain lift hauls the cart up...
+    [1130, 30],
+    [1166, 30], // ...over the summit...
+    [1236, 0], // ...and down through the mountain tunnel
+    [1370, 0], // Bumpy Meadows: three humps, each bigger
+    [1410, 4],
+    [1450, 0],
+    [1500, 6],
+    [1550, 0],
+    [1610, 8],
+    [1670, 0],
+    [1810, 0], // Crystal River: a low bridge over the water
+    [1855, 2],
+    [1915, 2],
+    [1960, 0],
+    [2030, 0], // Waterfall Gorge: the Sky Trestle climbs...
+    [2170, 34],
+    [2310, 34], // ...runs high over the lake...
+    [2390, 4], // ...and plunges to the falls
+    [2470, 4], // Glow Mine: through the falls into the mountain, a dip inside
+    [2550, 0],
+    [2870, 0], // Golden Sands: two last humps
+    [2910, 5],
+    [2950, 0],
+    [3000, 7],
+    [3060, 0],
   ],
-  river: { s0: 2090, s1: 2140 }, // water across the valley under the bridge
-  gorge: { s0: 2250, s1: 2650, wallX: 104, lake: 2300 }, // walls either side, lake from `lake`
-  falls: 2648, // the waterfall curtain across the gorge's end (the mine mouths behind it)
-  mine: { s0: 2652, s1: 2966, roof: 14, boreHalf: 4.2 }, // tunnels through the mountain
-  station: 3380, // Golden Station platform starts here
+  river: { s0: 1860, s1: 1910 }, // water across the valley under the bridge
+  gorge: { s0: 2020, s1: 2420, wallX: 104, lake: 2070 }, // walls either side, lake from `lake`
+  falls: 2418, // the waterfall curtain across the gorge's end (the mine mouths behind it)
+  mine: { s0: 2422, s1: 2736, roof: 14, boreHalf: 4.2 }, // tunnels through the mountain
+  station: 3150, // Golden Station platform starts here
+  // Bends: [s0, s1, dx] each shifts every track sideways by dx m (a smoothstep), so a
+  // run of them makes an S. The cart leans into them (A / D, see LEAN).
+  bends: [
+    [520, 650, 10], // Whispering Forest: one long gentle curve (lean a little)
+    [705, 790, 18], // Switchback Hills: brake for these
+    [805, 890, -30],
+    [905, 985, 2],
+  ],
+  lift: { s0: 1000, s1: 1132, speed: 5 }, // chain lift: below `speed` the chain pulls the cart up
+  tunnels: [{ s0: 1172, s1: 1236, name: 'Mountain Tunnel' }], // dark, lamp-lit bores (the mine is separate)
+  drawbridge: { s0: 1868, s1: 1900, barrier: 1861 }, // the river bridge's lifting span (home track)
+  junction: { choose: 2752, s0: 2762, s1: 2862, offset: 7.5, ramp: 22 }, // the Gem Run branch (home track)
+  goldLine: 3196, // stop the cart on it at Golden Station: PERFECT STOP
 }
 
 // Areas along the line (ride.js zone cards, ambient particles; zones.js scenery).
 // The first time a run reaches an area past the player's best it pays `bonus` Cash.
 // air: the ambient particles drifting there (fx.ambient); dust: wheel dust colour.
 export const ZONES = [
-  { id: 'valley', name: 'Green Valley', s: -100, color: '#7dff5a', dust: '#9bbf74', air: 'pollen' },
-  { id: 'canyon', name: 'Broken Canyon', s: 470, color: '#ffb35a', dust: '#b98a5a', air: null, quiet: true },
-  { id: 'long', name: 'Long Valley', s: 694, color: '#7dff5a', dust: '#9bbf74', air: 'pollen', quiet: true },
-  { id: 'hills', name: 'Bumpy Meadows', sub: 'Catch some air!', s: 1560, bonus: 500, color: '#8dff5a', dust: '#9bbf74', air: 'leaves' },
-  { id: 'river', name: 'Crystal River', sub: 'Over the water!', s: 1920, bonus: 1000, color: '#7fe8ff', dust: '#dfe6ee', air: 'spray' },
-  { id: 'gorge', name: 'Waterfall Gorge', sub: 'Up the Sky Trestle!', s: 2255, bonus: 2000, color: '#5ab8ff', dust: '#8a5a32', air: 'mist' },
-  { id: 'mine', name: 'Glow Mine', sub: 'Through the falls!', s: 2652, bonus: 4000, color: '#d07bff', dust: '#6a5a8a', air: 'sparkle', tunnel: true },
-  { id: 'desert', name: 'Golden Sands', sub: 'Almost there...', s: 2966, bonus: 7000, color: '#ffd23a', dust: '#e8c07a', air: 'sand' },
-  { id: 'station', name: 'Golden Station', sub: 'END OF THE LINE!', s: 3380, bonus: 12000, color: '#ffe066', dust: '#e8c07a', air: 'sand', finish: true },
+  { id: 'valley', name: 'Sunny Farm', s: -100, color: '#7dff5a', dust: '#9bbf74', air: 'pollen' },
+  { id: 'canyon', name: 'Broken Canyon', s: 240, color: '#ffb35a', dust: '#b98a5a', air: null, quiet: true },
+  { id: 'forest', name: 'Whispering Forest', sub: 'Watch for wildlife!', s: 464, bonus: 300, color: '#5fd14a', dust: '#7a5a3a', air: 'leaves' },
+  { id: 'switchback', name: 'Switchback Hills', sub: 'Lean with A / D!', s: 694, bonus: 400, color: '#b6ff5a', dust: '#9bbf74', air: 'pollen' },
+  { id: 'pass', name: 'Mountain Pass', sub: 'Up the chain lift!', s: 994, bonus: 450, color: '#dfefff', dust: '#a9b1c0', air: 'snow' },
+  { id: 'hills', name: 'Bumpy Meadows', sub: 'Catch some air!', s: 1330, bonus: 500, color: '#8dff5a', dust: '#9bbf74', air: 'leaves' },
+  { id: 'pasture', name: 'Woolly Pasture', sub: 'Sheep crossing!', s: 1676, bonus: 600, color: '#fff6d8', dust: '#9bbf74', air: 'pollen' },
+  { id: 'river', name: 'Crystal River', sub: 'Mind the drawbridge!', s: 1800, bonus: 1000, color: '#7fe8ff', dust: '#dfe6ee', air: 'spray' },
+  { id: 'gorge', name: 'Waterfall Gorge', sub: 'Up the Sky Trestle!', s: 2025, bonus: 2000, color: '#5ab8ff', dust: '#8a5a32', air: 'mist' },
+  { id: 'mine', name: 'Glow Mine', sub: 'Through the falls!', s: 2422, bonus: 4000, color: '#d07bff', dust: '#6a5a8a', air: 'sparkle', tunnel: true },
+  { id: 'desert', name: 'Golden Sands', sub: 'Sandstorm! Pick a lane...', s: 2736, bonus: 7000, color: '#ffd23a', dust: '#e8c07a', air: 'sand' },
+  { id: 'station', name: 'Golden Station', sub: 'END OF THE LINE!', s: 3150, bonus: 12000, color: '#ffe066', dust: '#e8c07a', air: 'sand', finish: true },
 ]
 export const zoneAt = (s) => {
   let i = 0
@@ -378,7 +403,8 @@ export const zoneAt = (s) => {
 export const CART = {
   gravity: 20, // m/s^2 along the rails and in the air
   brake: 14, // m/s^2 with S held
-  wagonMass: 0.07, // each extra cart: thrust divided by (1 + n * this)
+  wagonMass: 0.04, // each extra cart: thrust divided by (1 + n * this)
+  wagonFuel: 0.05, // ...and it carries fuel: tank x (1 + n * this)
   wagonGap: 3.1, // m between cart centres on the rails
   airDrag: 0.0006, // per metre, horizontal, while flying
   stopSpeed: 0.35, // m/s: below this with no fuel the run ends
@@ -387,14 +413,70 @@ export const CART = {
   hopKeep: 0.97, // ...and after airtime off a crest
   hopFrom: -0.6, // m/s^2: the rails let go once the pull into them drops below this
   rollbackEnd: 14, // m: out of fuel and rolling back this far behind the best ends the run
-  safeS: 360, // where a revive puts you back (before the ramp)
+  safeS: 130, // where a revive puts you back (before the ramp)
 }
+
+// --- Leaning into bends (cartPhysics.js) ---------------------------------------------------
+// In a bend the cart is pushed outwards by v^2 * curvature (m/s^2). Leaning (A / D,
+// the lean buttons) cancels up to `accel` of it; the rest is carried by the wheels'
+// grip (x accel). tip = (push / accel - lean) / grip: under `green` the cart is
+// steady, up to 1 it rides on two wheels (sparks, a screech), past 1 for
+// `derailTime` s it comes off the rails. Rain (Thunderstorm) costs `rainGrip`.
+export const LEAN = {
+  accel: 9,
+  rate: 4.5, // 1/s the cart's lean follows the input
+  green: 0.5,
+  derailTime: 0.55,
+  rainGrip: 0.85,
+  autoMargin: 0.85, // headless sims (no lean input) brake to this share of the safe speed
+}
+
+// --- Hazards and encounters along the line (encounters.js) -------------------------------
+// Each one blocks the home track at `at` for a while once the cart passes `trigger`.
+// Stop before `at` and wait for it to clear: a patience bonus. Arrive while it is
+// blocked: under `bump` m/s a bump (speed lost), faster a crash. Bonuses are in
+// metres of run pay (state.bonusCash), so they grow with the Cart Upgrades.
+export const HAZARDS = [
+  { id: 'deer', kind: 'herd', animal: 'deer', name: 'ANIMAL CROSSING!', sub: 'Stop and let them pass', trigger: 486, at: 600, cross: 5.5, bump: 22, bonus: 60 },
+  { id: 'sheep', kind: 'herd', animal: 'sheep', name: 'SHEEP CROSSING!', sub: 'Slow down...', trigger: 1640, at: 1745, cross: 5, bump: 99, bonus: 50, soft: true }, // soft: sheep scatter (speed lost), never a crash
+  { id: 'bridge', kind: 'bridge', name: 'DRAWBRIDGE UP!', sub: 'Wait for the green light', trigger: 1690, at: 1861, cross: 8.5, bump: 12, bonus: 50 },
+  { id: 'rocks', kind: 'rocks', name: 'ROCKSLIDE!', sub: 'Boost through or brake!', trigger: 1932, at: 1996, cross: 4, bump: 18, bonus: 40, early: 1.4 },
+]
+export const BEAR = { s0: 520, s1: 600, wait: 9, warn: 3, fuelLoss: 0.4 } // waited too long near the herd: a bear comes
+export const WIND = { s0: 2165, s1: 2315, every: [2.5, 4.5], warn: 0.7, gust: 1.6, push: 0.95 } // gusts on the Sky Trestle (push in LEAN units)
+
+// --- Pickups, gates and skill bonuses (pickups.js) -------------------------------------------
+// Coin / gem rows along the home track; `m` = metres of run pay each is worth.
+export const PICKUPS = {
+  coin: 3,
+  gem: 18,
+  ticket: 250, // the Golden Ticket: one per run, somewhere past Bumpy Meadows
+  fuel: [205, 650, 1080, 1590, 2120, 2610], // fuel cans: +fuelRefill of the tank
+  fuelRefill: 0.3,
+  boost: [530, 1285, 1955, 2470, 3010], // boost pads: +boostKick m/s
+  boostKick: 7,
+  gates: [
+    { s: 1300, lo: 22, hi: 40 }, // speed gates: through inside [lo, hi] m/s pays `gate`
+    { s: 2230, lo: 28, hi: 50 },
+    { s: 2990, lo: 40, hi: 75 },
+  ],
+  gate: 30,
+  leanPerfect: 35, // through a bend steady (tip never past LEAN.green)
+  leanDrift: 70, // ...or on two wheels for over driftTime s without coming off
+  driftTime: 0.6,
+  perfectStop: 150, // stopped within stopWindow m of the gold line
+  stopWindow: 2.5,
+  summit: 40, // over the top of the chain lift
+}
+// Where REVIVE puts the cart back: the last checkpoint at least 15 m behind the crash.
+export const CHECKPOINTS = [130, 470, 690, 990, 1320, 1640, 1930, 2240, 2560, 2740, 3100]
 
 // --- Gear (state.js, the Shop restock window, the Index) ---------------------------
 // type: engine | fuel | wheels | booster. Stats:
 //  engine  speed (shown in the Index; thrust accel = speed / 10 m/s^2), burn (fuel use x)
 //  fuel    tank (s of full throttle; the Index shows it as Fuel)
-//  wheels  roll (m/s^2 rolling resistance), drag (air drag factor)
+//  wheels  roll (m/s^2 rolling resistance), drag (air drag factor), grip (how hard the
+//          cart can corner before it tips: see LEAN)
 //  booster boost (m/s^2), time (s), charges (per run)
 // price: Cash (also the sell-back base). starter = what a fresh cart has (never sold).
 // shop = sold by the restocking Shop (cave stall); the others drop from Mystery Dice
@@ -443,7 +525,7 @@ export const GEAR = [
   E('bubblegum', 'BubbleGum Engine', 'mythic', 44000, 305, '#8a5ac8'),
   E('water', 'Water Engine', 'mythic', 48000, 326, '#2a8ae0'),
   E('seaweed', 'Seaweed Engine', 'mythic', 45000, 350, '#9a5ad8', { shop: true, reb: 4, desc: 'Sea the light of speed' }),
-  E('hamburger', 'Hamburger Engine', 'mythic', 82500, 380, '#e0a050', { shop: true, desc: 'Fast food, faster cart' }),
+  E('hamburger', 'Hamburger Engine', 'mythic', 82500, 380, '#e0a050', { shop: true, reb: 5, desc: 'Fast food, faster cart' }),
   // Fuel sources
   F('jerry', 'Jerry Can', 'common', 0, 11, '#c0392b', { starter: true, desc: 'Half full' }),
   F('smallfuel', 'Small Fuel', 'common', 45, 14, '#e8463a', { shop: true, desc: 'Go longer' }),
@@ -464,19 +546,19 @@ export const GEAR = [
   F('starfish', 'Starfish Fuel', 'legendary', 19000, 90, '#c84a3a', { shop: true, reb: 4, desc: 'Fueled by the uniqueness of the sea' }),
   F('cybercontact', 'Cyber Contact Fuel', 'mythic', 30000, 97, '#4a6ad8'),
   F('cyberquadric', 'Cyber Quadric Fuel', 'mythic', 40000, 105, '#3a4ab8'),
-  F('fries', 'Fries Fuel', 'mythic', 61000, 120, '#e83a3a', { shop: true, desc: 'Crispy, salty, explosive' }),
+  F('fries', 'Fries Fuel', 'mythic', 61000, 120, '#e83a3a', { shop: true, reb: 5, desc: 'Crispy, salty, explosive' }),
   // Wheels
-  { id: 'wooden', type: 'wheels', name: 'Wooden Wheels', rarity: 'common', price: 0, starter: true, roll: 0.55, drag: 1, color: '#8b5a2b', reb: 0, desc: 'Bumpy' },
-  { id: 'rubber', type: 'wheels', name: 'Rubber Wheels', rarity: 'common', price: 110, shop: true, roll: 0.42, drag: 0.95, color: '#2d2d2d', reb: 0, desc: 'Roll smoother' },
-  { id: 'sport', type: 'wheels', name: 'Sport Wheels', rarity: 'uncommon', price: 520, shop: true, roll: 0.3, drag: 0.88, color: '#e74c3c', reb: 0, desc: 'Grip and go' },
-  { id: 'racing', type: 'wheels', name: 'Racing Wheels', rarity: 'rare', price: 2300, shop: true, roll: 0.19, drag: 0.8, color: '#f1c40f', reb: 0, desc: 'Built for the gap' },
-  { id: 'hover', type: 'wheels', name: 'Hover Pads', rarity: 'legendary', price: 26000, shop: true, roll: 0.06, drag: 0.66, color: '#00d2ff', reb: 0, desc: 'Who needs wheels?' },
+  { id: 'wooden', type: 'wheels', name: 'Wooden Wheels', rarity: 'common', price: 0, starter: true, roll: 0.55, drag: 1, grip: 1, color: '#8b5a2b', reb: 0, desc: 'Bumpy' },
+  { id: 'rubber', type: 'wheels', name: 'Rubber Wheels', rarity: 'common', price: 110, shop: true, roll: 0.42, drag: 0.95, grip: 1.2, color: '#2d2d2d', reb: 0, desc: 'Roll smoother' },
+  { id: 'sport', type: 'wheels', name: 'Sport Wheels', rarity: 'uncommon', price: 520, shop: true, roll: 0.3, drag: 0.88, grip: 1.5, color: '#e74c3c', reb: 0, desc: 'Grip and go' },
+  { id: 'racing', type: 'wheels', name: 'Racing Wheels', rarity: 'rare', price: 2300, shop: true, roll: 0.19, drag: 0.8, grip: 2, color: '#f1c40f', reb: 1, desc: 'Built for the gap' },
+  { id: 'hover', type: 'wheels', name: 'Hover Pads', rarity: 'legendary', price: 26000, shop: true, roll: 0.06, drag: 0.66, grip: 2.6, color: '#00d2ff', reb: 3, desc: 'Who needs wheels?' },
   // Boosters (Shift / Space / BOOST button during a ride)
   { id: 'none', type: 'booster', name: 'No Booster', rarity: 'common', price: 0, starter: true, boost: 0, time: 0, charges: 0, color: '#666666', reb: 0 },
   { id: 'firework', type: 'booster', name: 'Firework Rocket', rarity: 'common', price: 260, shop: true, boost: 9, time: 1.3, charges: 1, color: '#ff6b81', reb: 0, desc: 'One big bang' },
   { id: 'nitro', type: 'booster', name: 'Nitro Bottle', rarity: 'rare', price: 1700, shop: true, boost: 14, time: 2, charges: 2, color: '#1e90ff', reb: 0, desc: 'Two shots of speed' },
-  { id: 'twinnitro', type: 'booster', name: 'Twin Nitro', rarity: 'epic', price: 7800, shop: true, boost: 19, time: 2.4, charges: 3, color: '#00e5ff', reb: 0, desc: 'Double trouble' },
-  { id: 'afterburner', type: 'booster', name: 'Afterburner', rarity: 'mythic', price: 64000, shop: true, boost: 28, time: 3, charges: 4, color: '#ff7b00', reb: 0, desc: 'Light it up' },
+  { id: 'twinnitro', type: 'booster', name: 'Twin Nitro', rarity: 'epic', price: 7800, shop: true, boost: 19, time: 2.4, charges: 3, color: '#00e5ff', reb: 2, desc: 'Double trouble' },
+  { id: 'afterburner', type: 'booster', name: 'Afterburner', rarity: 'mythic', price: 64000, shop: true, boost: 28, time: 3, charges: 4, color: '#ff7b00', reb: 4, desc: 'Light it up' },
 ]
 export const DEFAULT_GEAR = { engine: 'rusty', fuel: 'jerry', wheels: 'wooden', booster: 'none' }
 export const GEAR_TYPES = [
@@ -505,7 +587,7 @@ export const INDEX_TABS = [
 // Bundles sold on the base display pads (and in the SHOP). Cash only, priced a
 // little above the parts bought one by one (they skip the restock wait).
 export const BUNDLES = {
-  starter: { name: 'Starter Pack', price: 1350, gear: ['sail', 'bigfuel', 'sport', 'firework'] },
+  starter: { name: 'Starter Pack', price: 2100, gear: ['v12', 'bigfuel', 'sport', 'firework'] }, // clears the canyon
   v8: { name: 'OP V8 Engine', price: 15500, gear: ['opv8'] },
 }
 
@@ -513,7 +595,7 @@ export const BUNDLES = {
 // A run pays floor(distance / Distance Per Currency) x Currency x Currency
 // Multiplier (the Cart Upgrades), x the cart / rebirth / pass / event multipliers.
 export const ECONOMY = {
-  startCash: 100,
+  startCash: 250,
   wagonCash: 0.1, // +10% run cash per extra cart
   goldenCash: 0.25, // +25% run cash per Golden Cart (rebirth reward, kept forever)
   wagonPrice: (n) => Math.round(60 * Math.pow(1.45, n)), // price of the (n+1)th extra cart
@@ -530,27 +612,66 @@ export const ECONOMY = {
 // --- Cart Upgrades (the base stall) ----------------------------------------------------
 // Bought level by level for Cash (the second button buys UPGRADE_BULK levels at once).
 // value(level) is what the row shows; price(level) is the price of the NEXT level.
+// kind 'cash' rows feed runPayout; kind 'cart' rows feed cartStats (stat = the mod they set):
+// Engine Power multiplies thrust, Fuel Tank the tank, Aerodynamics rolling + air drag.
+const pct = (v) => `+${Math.round((v - 1) * 100)}%`
 export const UPGRADES = [
   {
+    id: 'power',
+    kind: 'cart',
+    stat: 'power',
+    name: 'Engine Power',
+    icon: 'bolt',
+    max: 25,
+    value: (l) => 1 + l * 0.03,
+    text: pct,
+    price: (l) => Math.round(250 * Math.pow(1.38, l)),
+  },
+  {
+    id: 'tank',
+    kind: 'cart',
+    stat: 'tankMul',
+    name: 'Fuel Tank',
+    icon: 'fuel',
+    max: 25,
+    value: (l) => 1 + l * 0.06,
+    text: pct,
+    price: (l) => Math.round(200 * Math.pow(1.38, l)),
+  },
+  {
+    id: 'aero',
+    kind: 'cart',
+    stat: 'aero',
+    name: 'Aerodynamics',
+    icon: 'aero',
+    max: 20,
+    value: (l) => 1 - l * 0.015,
+    text: (v) => (v >= 1 ? '0%' : `-${+((1 - v) * 100).toFixed(1)}%`),
+    price: (l) => Math.round(400 * Math.pow(1.42, l)),
+  },
+  {
     id: 'dist',
+    kind: 'cash',
     name: 'Distance Per Currency',
     icon: 'compass',
     max: 16,
-    value: (l) => [20, 18, 16, 14, 12, 10, 9, 8, 7, 6, 5, 4.5, 4, 3.5, 3, 2.5, 2][l],
+    value: (l) => [10, 9, 8, 7, 6, 5.5, 5, 4.5, 4, 3.5, 3, 2.75, 2.5, 2.25, 2, 1.75, 1.5][l],
     text: (v) => String(v),
     price: (l) => Math.round(500 * Math.pow(1.75, l)),
   },
   {
     id: 'mult',
+    kind: 'cash',
     name: 'Currency Multiplier',
     icon: 'chart',
     max: 60,
-    value: (l) => 1 + l * 0.05,
+    value: (l) => 1 + l * 0.1,
     text: (v) => `x${+v.toFixed(2)}`,
-    price: (l) => Math.round(1000 * Math.pow(1.32, l)),
+    price: (l) => Math.round(800 * Math.pow(1.3, l)),
   },
   {
     id: 'cur',
+    kind: 'cash',
     name: 'Currency',
     icon: 'cash',
     max: 100,
@@ -566,7 +687,7 @@ export const UPGRADE_BULK = 5
 // cash, gear, extra carts and Cart Upgrades; gives +1 Golden Cart, +cashStep run cash
 // and a free `engine`. Skip = rebirth without the carts, for skipMarkup x the cash.
 export const REBIRTH = {
-  cash: (r) => Math.round(25000 * Math.pow(1.8, r)),
+  cash: (r) => Math.round(25000 * Math.pow(2.4, r)),
   carts: (r) => 11 + 2 * r,
   cashStep: 0.2,
   engine: 'engine',
@@ -734,6 +855,44 @@ export const NET = {
   rejoin: 2, // s after a dropped room before rejoining
   requestTimeout: 8, // s a request (quest re-roll) waits for its answer
   localSave: 'build-a-cart.save.v2', // guests and serverless play keep their save in this browser
+  poseEvery: 0.1, // s between foot poses sent while walking (and changed)
+  cartEvery: 0.05, // s between cart states sent while riding
+  heartbeat: 1, // s between repeats of an unchanged pose, so late joiners see it
+  remoteLerp: 14, // 1/s: how fast a remote walker / cart eases to the latest state
+  remoteFade: 420, // m: remote walkers / parked carts further than this are hidden
+  nameTagHeight: 3.6, // m above a remote's feet
+  adCooldown: 65, // s between rewarded ads the server accepts (backend AD_COOLDOWN_MS is 60 s)
+}
+
+// --- Multiplayer room (net.js, remote.js; backend ROOM_MAX_CLIENTS) --------------------------------
+// One room seats 5 players, one per base. Each client sees ITSELF on the home (middle) base; the
+// other players are put on the four remaining bases, nearest first, and keep that base while they
+// stay in the room. Past TRACK.merge every cart rides the one shared line.
+export const MULTI = {
+  maxPlayers: 5, // = the backend's ROOM_MAX_CLIENTS (and the Bloxity maxPartySize)
+  basePrefs: [1, 3, 0, 4], // base indexes (BASES.xs) the other players take, in order
+  wagonDraw: 12, // most trailing carts drawn behind a remote lead cart
+  smokeRange: 90, // m: remote exhaust / flames / sparks are only spawned this close to the camera
+  bubbleSeconds: 4, // chat bubble lifetime (SDK chat.bubbleSeconds)
+}
+
+// --- Bloxity platform features (bloxity.js) ----------------------------------------------------
+// Hosted leaderboards: ids are permanent and MUST match the backend's PLATFORM_BOARDS
+// (src/constants.ts); the server reports each signed-in player's scores, define() below only
+// declares them so the portal's trophy button shows them.
+export const LEADERBOARDS = [
+  { id: 'best', label: 'Best Distance (m)', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'earned', label: 'Total Earned', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'rebirths', label: 'Rebirths', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
+  { id: 'playtime', label: 'Play Time (min)', order: 'desc', mode: 'latest', format: 'number', reset: 'none' },
+]
+// Screen ads: declared once; gameplay banners stay off (never over the ride).
+export const AD_SCREENS = { menu: {}, results: {}, gameplay: {} }
+// Rewarded ads (ads.showRewarded). Placement names: lowercase letters, digits and hyphens. Nothing is
+// ever sold for Gems; watching an ad only gives these small perks.
+export const ADS = {
+  revive: { placement: 'revive', label: 'FREE REVIVE', hint: 'Watch an ad' },
+  boost: { placement: 'cash-boost', label: 'x2 CASH', hint: '2x cash for 10 min', seconds: 600 },
 }
 
 // --- Audio (audio/) --------------------------------------------------------------------------
