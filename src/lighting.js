@@ -205,6 +205,8 @@ export function createLighting(scene, renderer, preset) {
     sun,
     addLamp,
     isNight: () => target === 1,
+    // 0 = day .. 1 = night, eased (glowing eyes, fireflies, the cart's headlight).
+    nightLevel: () => night,
     // A world's sky { day, night } (WORLDS): swapped at once, keeping day or night as it is.
     setMoods(sky) {
       if (sky.day === D && sky.night === N) return

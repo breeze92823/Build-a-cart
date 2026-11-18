@@ -7,9 +7,10 @@
 // when the cart stops with no fuel, on RETURN, or in a crash (REVIVE for cash
 // or RESTART); its cash (state.js runPayout: distance / Distance Per Currency x Currency x
 // multipliers) is banked at the end.
-import { Group, Vector3 } from 'three'
-import { BASES, CART, ECONOMY, TRACK, ZONES, zoneAt } from './config.js'
-import { FLOOR_Y, fireBoost, newCart, stepCart, topSpeed, trackHeight, trackSlope } from './cartPhysics.js'
+import { Group, SpotLight, Vector3 } from 'three'
+import { BASES, CART, CHECKPOINTS, ECONOMY, LEAN, TRACK, ZONES, zoneAt } from './config.js'
+import { FLOOR_Y, VALLEY_Y, bendAt, fireBoost, newCart, safeSpeed, stepCart, topSpeed, trackHeight, trackSlope, trackX, trackXSlope } from './cartPhysics.js'
+import { createEncounters } from './encounters.js'
 import { buildCart, buildGhost, buildWagon, mountPart, WHEEL_R } from './cartModel.js'
 import { RAIL_TOP } from './track.js'
 import { zAt } from './world.js'
@@ -17,6 +18,7 @@ import { addCash, currentStats, equippedGear, onChange, recordBoost, recordJump,
 import { onTick } from './physics.js'
 import { inputState } from './input.js'
 import { sfx } from './audio/index.js'
+import { hideDeathScreen, showAdScreen, showDeathScreen } from './bloxity.js'
 
 const HIST = 2048
 // Rails on timber (river bridge, Sky Trestle) sound hollower (audio/cart.js).
@@ -24,11 +26,36 @@ const supportWood = (s) => (s > TRACK.river.s0 - 50 && s < TRACK.river.s1 + 50) 
 // Carts pulled behind the lead cart: Golden Carts (rebirth rewards) first, then extra carts.
 const trailing = () => state.wagons + state.goldenCarts
 
+// Tunnels the cart dives into (the mine's bores and the Mountain Tunnel): 0..1 inside.
+const TUNNELS = [TRACK.mine, ...TRACK.tunnels]
+function tunnelAt(s) {
+  let k = 0
+  for (const t of TUNNELS) k = Math.max(k, Math.min(1, Math.max(0, Math.min((s - t.s0) / 14, (t.s1 - s) / 14))))
+  return k
+}
+// Where REVIVE puts the cart back after crashing at s.
+function checkpointFor(s) {
+  let best = CART.safeS
+  for (const c of CHECKPOINTS) if (c <= s - 15 && c > best) best = c
+  // Never back onto the canyon flight or into a bend's middle.
+  return best
+}
+
 export function createRide(scene, deps) {
-  const { hud, fx, player, camera: cam, events } = deps
+  const { hud, fx, player, camera: cam, events, lighting } = deps
+  const adOffered = () => !!deps.adReady?.() // a rewarded ad can be shown (Bloxity only)
   const baseX = BASES.xs[BASES.home]
   const root = new Group()
   scene.add(root)
+  const enc = createEncounters(scene, { fx, hud, cam })
+  // The cart's headlight: always in the scene (adding a light later recompiles every
+  // material), dark until a tunnel or the night calls for it.
+  const headlight = new SpotLight('#fff1c8', 0, 70, 0.55, 0.45, 1.4)
+  headlight.castShadow = false
+  root.add(headlight, headlight.target)
+  let leanBtnL = false
+  let leanBtnR = false
+  let crashKind = null
   let cart = null
   let wagons = []
   let builtKey = ''
@@ -114,6 +141,8 @@ export function createRide(scene, deps) {
   let airK = 0 // eased 0..1 while flying
   let ambientAcc = 0
 
+  let lastTunnel = 0
+  let screechAcc = 0
   // Breadcrumbs of the lead cart's path for the trailing carts: (path length, s, y, pitch).
   const hist = new Float32Array(HIST * 4)
   let hHead = 0
@@ -179,14 +208,27 @@ export function createRide(scene, deps) {
 
   // Positions the train for this frame: lead at (s, y, pitch), carts along the breadcrumbs.
   const tmp = new Vector3()
+  const xAt = (s) => baseX + trackX(s) + enc.laneX(s)
+  const yawAt = (s) => -Math.atan(trackXSlope(s) + (enc.laneX(s + 0.5) - enc.laneX(s - 0.5)))
+  let roll = 0
   function place(s, y, pitch, spinV, dt = 0) {
     if (!cart) return
-    cart.position.set(baseX, y + RAIL_TOP + (cart.userData.hover ? 0.25 : 0), zAt(s))
+    cart.position.set(xAt(s), y + RAIL_TOP + (cart.userData.hover ? 0.25 : 0), zAt(s))
+    cart.rotation.y = yawAt(s)
+    // Lean into the bend; past the green the cart rides up on two wheels (away from the turn).
+    if (c && mode === 'riding' && !c.air) {
+      const over = Math.max(0, Math.abs(c.tip) - LEAN.green)
+      const want = -c.lean * 0.16 + Math.sign(c.tip) * Math.min(0.42, over * 0.55)
+      roll += (want - roll) * Math.min(1, dt * 12)
+    } else roll += (0 - roll) * Math.min(1, dt * 6)
+    cart.rotation.z = roll
     cart.userData.tilt.rotation.x = pitch
     for (const w of cart.userData.spin) w.rotation.x -= (spinV / WHEEL_R) * dt
     wagons.forEach((w, i) => {
       const p = histAt((i + 1) * CART.wagonGap)
-      w.position.set(baseX, p.y + RAIL_TOP, zAt(p.s))
+      w.position.set(xAt(p.s), p.y + RAIL_TOP, zAt(p.s))
+      w.rotation.y = yawAt(p.s)
+      w.rotation.z = roll * 0.6
       w.userData.tilt.rotation.x = p.pitch
       for (const wh of w.userData.spin) wh.rotation.x -= (spinV / WHEEL_R) * dt
       w.visible = mode !== 'crashed'
@@ -208,9 +250,12 @@ export function createRide(scene, deps) {
     if (mode !== 'idle') return
     preview(null)
     rebuild()
-    st = currentStats(events.speed())
+    st = currentStats(events.speed(), events.storm() > 0.5)
     const s0 = restS()
     c = newCart(st, s0)
+    enc.reset(c, events.cash())
+    crashKind = null
+    roll = 0
     startS = s0
     prev.s = c.s
     prev.y = c.y
@@ -232,13 +277,60 @@ export function createRide(scene, deps) {
     cam.setRide(true)
   }
 
+  // The portal's death screen (Bloxity): its countdown (>= 4 s, with ads) gates every respawn. `death`
+  // is its handle, deathLeft the seconds still to wait. Without the SDK the game's own timer rules.
+  let death = null
+  let deathLeft = 0
+  let deathOff = null
+  function startDeath() {
+    endDeath()
+    death = showDeathScreen()
+    if (!death) return
+    deathLeft = 4
+    try {
+      deathOff = death.onCountdown?.((n) => (deathLeft = n)) ?? null
+    } catch {
+      deathOff = null
+    }
+    showAdScreen('results')
+  }
+  function endDeath() {
+    if (deathOff) {
+      try {
+        deathOff()
+      } catch {
+        // Already gone.
+      }
+    }
+    deathOff = null
+    if (death) hideDeathScreen()
+    death = null
+    deathLeft = 0
+    showAdScreen(null)
+  }
+  // True when a respawn may happen now: always without a death screen, else once the portal says so.
+  function mayRespawn() {
+    if (!death) return true
+    try {
+      return !!death.respawn()
+    } catch {
+      return true
+    }
+  }
+
   function dismountAtBase() {
+    endDeath()
     mode = 'idle'
     c = null
     timeScale = 1
     tunnel = 0
     airK = 0
+    headlight.intensity = 0
     hud.speedFx(0, false, 0)
+    hud.lean(0, false)
+    hud.bend(null)
+    hud.alert(null)
+    hud.junction(null)
     hud.setRiding(false)
     hud.showCrash(false)
     cart.visible = true
@@ -267,33 +359,62 @@ export function createRide(scene, deps) {
   }
 
   // --- Crash ------------------------------------------------------------------------------
-  function crash() {
+  const CRASH_TEXT = { derail: 'DERAILED!', herd: 'THE MOOSE WON!', rocks: 'CRUSHED BY ROCKS!', splash: 'INTO THE RIVER!' }
+  function crash(kind = 'spikes') {
     mode = 'crashed'
+    crashKind = kind
     crashTimer = ECONOMY.reviveCountdown
     const p = cartPoint(new Vector3(0, 0.8, 0), new Vector3())
-    fx.explosion(p, 1.3)
+    if (kind === 'splash') {
+      fx.spray(p, 120)
+      sfx.splash(2.6)
+    } else fx.explosion(p, kind === 'spikes' ? 1.3 : 0.9)
+    if (kind === 'derail') {
+      sfx.derail()
+      fx.sparks(p, 60)
+      fx.dust(p, 16, ZONES[zoneIdx].dust)
+    }
+    if (kind === 'herd') {
+      sfx.moose()
+      fx.stars(p.clone().setY(p.y + 1.6), 10)
+    }
+    if (kind === 'rocks') fx.chunks(p, 30, '#8a8a92', 1.4, 0.45)
+    if (CRASH_TEXT[kind]) hud.banner(CRASH_TEXT[kind], 'Revive to keep going')
+    startDeath()
     for (const w of wagons) fx.explosion(w.getWorldPosition(new Vector3()), 0.6)
-    spawnDebris(p)
+    // Off the rails sideways (bends, animals), down into the canyon, or into the river.
+    const side = kind === 'derail' ? Math.sign(c.tip || 1) * -1 : 0
+    const floor = kind === 'spikes' ? FLOOR_Y + 0.3 : kind === 'splash' ? VALLEY_Y - 0.6 : Math.min(trackHeight(c.s), VALLEY_Y) + 0.3
+    spawnDebris(p, floor, side)
     cart.visible = false
     for (const w of wagons) w.visible = false
     player.setHidden(true)
-    sfx.crash()
+    if (kind === 'spikes' || kind === 'rocks') sfx.crash()
     shake = 1.2
     timeScale = 1
     runCashNow = runPayout(c.maxS, events.cash())
+    hud.lean(0, false)
+    hud.alert(null)
   }
-  function revive() {
+  // free = a watched rewarded ad paid for it (main.js), not Cash.
+  function revive(free = false) {
     if (mode !== 'crashed') return
     const price = ECONOMY.revivePrice(runCashNow)
-    if (!spend(price)) {
+    if (!free && state.cash < price) {
       sfx.deny()
       hud.toast('Not enough cash to revive', 'bad')
       return
     }
-    // Back on the rails before the ramp with a full tank and boosters.
+    if (!mayRespawn()) return // the portal's countdown is still running
+    if (!free) spend(price)
+    endDeath()
+    // Back on the rails at the last checkpoint with a full tank and boosters.
     const maxS = c.maxS
     const jumped = c.jumped
-    c = newCart(st, CART.safeS)
+    const at = crashKind === 'spikes' ? CART.safeS : checkpointFor(c.s)
+    c = newCart(st, at)
+    enc.revive(at)
+    roll = 0
     c.maxS = maxS
     c.jumped = jumped
     zoneIdx = zoneAt(c.s)
@@ -310,7 +431,7 @@ export function createRide(scene, deps) {
     fx.confetti(cartPoint(new Vector3(0, 1.5, 0), new Vector3()), 30, 0.6)
   }
 
-  function spawnDebris(p) {
+  function spawnDebris(p, floor = FLOOR_Y + 0.3, side = 0) {
     const parts = []
     cart.traverse((o) => {
       if (o.isMesh && parts.length < 14 && Math.random() < 0.35) parts.push(o)
@@ -320,7 +441,7 @@ export function createRide(scene, deps) {
       m.position.copy(p)
       m.scale.multiplyScalar(1)
       root.add(m)
-      debris.push({ m, vx: (Math.random() - 0.5) * 12, vy: 4 + Math.random() * 9, vz: (Math.random() - 0.5) * 12, rx: Math.random() * 8, rz: Math.random() * 8 })
+      debris.push({ m, floor, vx: (Math.random() - 0.5) * 12 + side * 9, vy: 4 + Math.random() * 9, vz: (Math.random() - 0.5) * 12 - (side ? 6 : 0), rx: Math.random() * 8, rz: Math.random() * 8 })
     }
   }
   function clearDebris() {
@@ -346,7 +467,16 @@ export function createRide(scene, deps) {
         shake = Math.max(shake, 0.35)
       }
     }
-    stepCart(c, { throttle, brake }, st, dt, events_)
+    const mx = inputState.move.x
+    const lean = Math.max(-1, Math.min(1, (Math.abs(mx) > 0.15 ? mx : 0) + (leanBtnR ? 1 : 0) - (leanBtnL ? 1 : 0)))
+    const input = enc.beforeStep(c, { throttle, brake, lean }, dt)
+    const before = c.s
+    stepCart(c, input, st, dt, events_)
+    const hit = enc.afterStep(c, st, before, dt)
+    if (hit && !c.crashed) {
+      c.crashed = hit
+      events_.push('crash')
+    }
     histPush(c.s, c.y, c.pitch)
     for (const e of events_) {
       if (e === 'fuelOut') {
@@ -390,8 +520,12 @@ export function createRide(scene, deps) {
           fx.ring(p, ZONES[zoneIdx].dust, Math.round(10 + k * 20))
           if (c.airTime > 0.8) hud.airtime(c.airTime)
         }
-      } else if (e === 'crash') crash()
-      else if (e === 'bufferStop') {
+      } else if (e === 'crash') crash(c.crashed === true ? 'spikes' : c.crashed)
+      else if (e === 'derail') crash('derail')
+      else if (e === 'lift') {
+        sfx.liftEngage()
+        hud.pop('CHAIN LIFT!', '#e9f6ff', 1.1)
+      } else if (e === 'bufferStop') {
         sfx.bufferClang()
         shake = 0.6
       } else if (e === 'arrived') {
@@ -399,6 +533,7 @@ export function createRide(scene, deps) {
         mode = 'ending'
         endTimer = 4
         const cash = runPayout(c.maxS, events.cash())
+        enc.arrived(c.s)
         hud.banner('END OF THE LINE!', `${Math.round(c.maxS)}m · +$${Math.round(cash).toLocaleString('en-US')}`)
         sfx.finish(true)
         const p = cartPoint(new Vector3(0, 2, 0), new Vector3())
@@ -417,7 +552,9 @@ export function createRide(scene, deps) {
   const seat = new Vector3()
   const p = new Vector3()
   const back = new Vector3()
+  let ride_t = 0
   function update(dt, alpha) {
+    ride_t += dt
     rebuild()
     // Debris.
     for (const d of debris) {
@@ -427,7 +564,7 @@ export function createRide(scene, deps) {
       d.m.position.z += d.vz * dt
       d.m.rotation.x += d.rx * dt
       d.m.rotation.z += d.rz * dt
-      const floor = FLOOR_Y + 0.3
+      const floor = d.floor
       if (d.m.position.y < floor && d.vy < 0) {
         d.m.position.y = floor
         d.vy *= -0.3
@@ -441,6 +578,7 @@ export function createRide(scene, deps) {
 
     if (mode === 'idle') {
       place(restS(), 0, 0, 0)
+      enc.update(dt, ride_t, null, false)
       return
     }
     if (!c) return
@@ -485,6 +623,21 @@ export function createRide(scene, deps) {
           for (let i = 0; i < 2; i++) fx.flame(p, 0, 0, carry * 0.96 + 7, 1, '#9fe8ff', '#ff6a1a')
         }
       }
+      // On two wheels: sparks off the low side, a screech, the creak of the frame.
+      const over = !c.air ? Math.abs(c.tip) - LEAN.green : 0
+      if (over > 0) {
+        const k = Math.min(1, over * 1.6)
+        sfx.screech(k)
+        if (Math.abs(c.tip) > 0.85) sfx.tiltWarn(k)
+        screechAcc += dt * (10 + k * 30)
+        while (screechAcc > 1) {
+          screechAcc -= 1
+          back.set(Math.sign(c.tip) * 0.8, 0.05, Math.random() < 0.5 ? 0.82 : -0.82)
+          cartPoint(back, p)
+          fx.sparks(p, 2, 0, -Math.abs(v) * 0.85)
+        }
+      }
+      if (c.chain) sfx.chainClack(c.v)
       // Brake sparks off the wheels.
       const brakeIn = inputState.move.z < -0.2 || pedalBrake
       if (brakeIn && !c.air && Math.abs(v) > 6 && Math.random() < 0.8) {
@@ -512,15 +665,21 @@ export function createRide(scene, deps) {
     }
 
     if (mode === 'crashed') {
-      crashTimer -= dt
       const price = ECONOMY.revivePrice(runCashNow)
-      hud.showCrash(true, crashTimer, price, state.cash >= price)
-      if (Math.ceil(crashTimer) !== Math.ceil(crashTimer + dt) && crashTimer > 0) sfx.countdown(crashTimer < 1)
-      if (crashTimer <= 0) {
-        hud.showCrash(false)
-        player.setHidden(false)
-        finishRun('crash')
-        return
+      const ad = adOffered()
+      if (death) {
+        // The portal's countdown decides when anything may respawn; never on a timer.
+        hud.showCrash(true, deathLeft, price, state.cash >= price, { wait: deathLeft > 0, ad, hold: deathLeft <= 0 })
+      } else {
+        crashTimer -= dt
+        hud.showCrash(true, crashTimer, price, state.cash >= price, { ad })
+        if (Math.ceil(crashTimer) !== Math.ceil(crashTimer + dt) && crashTimer > 0) sfx.countdown(crashTimer < 1)
+        if (crashTimer <= 0) {
+          hud.showCrash(false)
+          player.setHidden(false)
+          finishRun('crash')
+          return
+        }
       }
     }
     if (mode === 'ending') {
@@ -531,6 +690,34 @@ export function createRide(scene, deps) {
       }
     }
 
+    // Headlight: tunnels, the mine, the night.
+    const nightK = lighting?.nightLevel?.() ?? 0
+    const lightK = mode === 'crashed' ? 0 : Math.max(tunnel, nightK * 0.8)
+    headlight.intensity = lightK * 220
+    if (lightK > 0.01) {
+      cartPoint(tmp.set(0, 1.3, -1.6), headlight.position)
+      cartPoint(tmp.set(0, 0.2, -24), headlight.target.position)
+    }
+    // Lean meter and the bend ahead.
+    if (mode === 'riding') {
+      const v0 = c.air ? 0 : c.v
+      const inBend = bendAt(c.s) >= 0 || Math.abs(enc.windSide()) > 0.05
+      hud.lean(c.tip, inBend || Math.abs(c.tip) > 0.2)
+      let bendText = null
+      let hot = false
+      for (let i = 0; i < TRACK.bends.length; i++) {
+        const [b0, b1] = TRACK.bends[i]
+        if (c.s > b1 || c.s < b0 - 160) continue
+        let vs = Infinity
+        for (let x = b0 + 1; x < b1; x += 3) vs = Math.min(vs, safeSpeed(x, st.grip))
+        if (vs > 70 || v0 < vs * 0.6) break
+        bendText = `BEND! MAX ${Math.floor(vs)}`
+        hot = v0 > vs * 1.05
+        break
+      }
+      hud.bend(bendText, hot)
+    }
+    enc.update(dt, ride_t, c, mode === 'riding' || mode === 'ending')
     runCashNow = runPayout(c.maxS, events.cash())
     const charges = c.charges
     hud.setRide({
@@ -545,7 +732,7 @@ export function createRide(scene, deps) {
       hasBooster: st.charges > 0,
     })
     airK += ((c.air && (!c.hop || c.airTime > 0.25) ? 1 : 0) - airK) * Math.min(1, dt * 5)
-    cam.rideState(speed01, shake, airK, mode === 'crashed', c.air ? 0 : trackSlope(c.s), c.boostLeft > 0)
+    cam.rideState(speed01, shake, airK, mode === 'crashed', c.air ? 0 : trackSlope(c.s), c.boostLeft > 0, yawAt(s), roll)
     hud.speedFx(mode === 'crashed' ? 0 : Math.max(0, (Math.abs(v) - 22) / 50), c.boostLeft > 0, tunnel)
   }
 
@@ -584,14 +771,18 @@ export function createRide(scene, deps) {
       hud.splash()
       fx.spray(cartPoint(new Vector3(0, 1.5, -1), new Vector3()), 90)
     }
-    // The mine: dark and echoing.
-    const M = TRACK.mine
-    const inMine = Math.min(1, Math.max(0, Math.min((s - M.s0) / 14, (M.s1 - s) / 14)))
-    tunnel += (inMine - tunnel) * Math.min(1, dt * 6)
+    // Tunnels (the mine, the Mountain Tunnel): dark and echoing.
+    const inT = tunnelAt(s)
+    if (inT > 0.05 && lastTunnel <= 0.05) sfx.tunnelEnter()
+    lastTunnel = inT
+    tunnel += (inT - tunnel) * Math.min(1, dt * 6)
+    // Sandstorm wind over the Golden Sands junction.
+    if (s > TRACK.junction.s0 - 40 && s < TRACK.junction.s1 + 30) sfx.sandstorm(0.7)
 
     // Ambient particles ahead of the cart: as it passes them they stream by
     // like wind. Denser at speed.
-    const kind = s > TRACK.falls - 90 && s < TRACK.falls + 4 ? 'mist' : ZONES[zoneIdx].air
+    const night = (lighting?.nightLevel?.() ?? 0) > 0.5
+    const kind = s > TRACK.falls - 90 && s < TRACK.falls + 4 ? 'mist' : tunnel > 0.5 && zoneIdx !== zoneAt(TRACK.mine.s0 + 1) ? null : night && ZONES[zoneIdx].id === 'forest' ? 'fireflies' : ZONES[zoneIdx].air
     if (!kind) return
     ambientAcc += dt * (5 + Math.min(40, Math.abs(v)) * (kind === 'mist' ? 1.6 : kind === 'sparkle' ? 0.2 : 0.6))
     while (ambientAcc > 1) {
@@ -650,13 +841,50 @@ export function createRide(scene, deps) {
     preview,
     mountPoint,
     revive,
-    restart: () => mode === 'crashed' && ((crashTimer = 0), hud.showCrash(false), player.setHidden(false), finishRun('crash')),
+    restart: () => {
+      if (mode !== 'crashed' || !mayRespawn()) return
+      crashTimer = 0
+      hud.showCrash(false)
+      player.setHidden(false)
+      finishRun('crash')
+    },
+    // What the other players draw of this cart (net.js `cart` message), null while it is parked.
+    presence() {
+      if (mode === 'idle' || !c) return null
+      const air = !!c.air
+      return {
+        ride: mode,
+        crash: mode === 'crashed' && typeof crashKind === 'string' ? crashKind : '',
+        s: c.s,
+        cy: c.y,
+        pitch: c.pitch,
+        roll,
+        lx: enc.laneX(c.s),
+        v: air ? c.vx : c.v,
+        throttle: c.throttle ?? 0,
+        braking: !air && (inputState.move.z < -0.2 || pedalBrake),
+        boosting: c.boostLeft > 0,
+        air,
+        fuelOk: c.fuel > 0,
+        tip: c.tip ?? 0,
+      }
+    },
     boost,
     launchOrReturn,
     interactKey,
     pedal(key, on) {
       if (key === 'gas') pedalGas = on
       else pedalBrake = on
+    },
+    // Touch lean buttons (dir -1 left / 1 right).
+    leanButton(dir, on) {
+      if (dir < 0) leanBtnL = on
+      else leanBtnR = on
+      if (on) enc.pickLane(dir)
+    },
+    lane: (dir) => enc.pickLane(dir),
+    get encounters() {
+      return enc
     },
     get riding() {
       return mode !== 'idle'
@@ -666,6 +894,10 @@ export function createRide(scene, deps) {
     },
     get mode() {
       return mode
+    },
+    // Dev (browser tests): the live cart physics state and this run's stats (null while parked).
+    get debug() {
+      return c ? { c, st, startS, bestAtStart, zoneIdx } : null
     },
     // Where to stand to get in: beside the lead cart.
     cartSpot: () => ({ x: baseX, z: zAt(restS()) }),
@@ -692,12 +924,17 @@ export function createRide(scene, deps) {
     get speed() {
       return c ? Math.abs(c.air ? c.vx : c.v) : 0
     },
+    // The lead cart's s on the line (-1e9 while parked).
+    get cartS() {
+      return c && mode !== 'idle' ? c.s : -1e9
+    },
     // Dev: put the riding cart at s with speed v (__game.ride.warp(2500, 60)).
     warp(s, v = 40) {
       if (!import.meta.env.DEV || mode !== 'riding' || !c) return
       c.s = c.maxS = s
       c.v = v
       c.air = c.hop = false
+      c.lean = c.tip = c.danger = 0
       c.y = trackHeight(s)
       prev.s = s
       prev.y = c.y

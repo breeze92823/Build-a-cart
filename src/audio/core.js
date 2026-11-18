@@ -42,7 +42,12 @@ try {
 } catch {
   // Storage blocked: unmuted.
 }
-const level = () => (muted ? 0 : volume * volume) // perceptual: the slider feels even
+let adMuted = false // an ad break is playing: silence, never persisted
+const level = () => (muted || adMuted ? 0 : volume * volume) // perceptual: the slider feels even
+export function setAdMuted(on) {
+  adMuted = !!on
+  applyLevel(0.01)
+}
 function applyLevel(t = 0.05) {
   if (A.master) A.master.gain.setTargetAtTime(level(), A.ctx.currentTime, t)
 }

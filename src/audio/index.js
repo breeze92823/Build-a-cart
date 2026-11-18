@@ -2,12 +2,12 @@
 //   installAudio() once at boot (waits for the first gesture), updateAudio(dt, st)
 //   every frame, sfx.<name>() for one-shots. Every press on a button anywhere gets
 //   its click here (one capture-phase listener), so menus need no wiring of their own.
-import { A, installAudio as installCore, isMuted, onStart, setDucked, setMuted, setVolume, toggleMuted } from './core.js'
+import { A, installAudio as installCore, isMuted, onStart, setAdMuted, setDucked, setMuted, setVolume, toggleMuted } from './core.js'
 import * as sfx from './sfx.js'
 import * as cart from './cart.js'
 import * as ambience from './ambience.js'
 
-export { sfx, setVolume, setMuted, isMuted, toggleMuted }
+export { sfx, setVolume, setMuted, setAdMuted, isMuted, toggleMuted }
 
 function onPress(e) {
   if (e.button > 0) return

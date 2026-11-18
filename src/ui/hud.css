@@ -534,6 +534,28 @@
   white-space: nowrap;
 }
 .crash .revive:disabled { filter: grayscale(0.8) brightness(0.8); }
+.crash .restart:disabled { filter: grayscale(0.8) brightness(0.8); }
+.crash .revive.ad { background: linear-gradient(#ffd84a, #f59a12); border-color: #4a2a00 !important; }
+.crash .revive.ad small { color: #ffe08a; }
+
+/* Rewarded ad button (Bloxity only), under the side buttons. */
+.ad-btn {
+  width: calc(var(--u) * 10.6);
+  min-height: calc(var(--u) * 3.4);
+  border-radius: calc(var(--u) * 0.4);
+  background: linear-gradient(#ffd84a, #f59a12);
+  border: calc(var(--u) * 0.22) solid #4a2a00 !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: calc(var(--u) * 0.2) 0;
+  transition: transform 0.08s;
+}
+.ad-btn:active { transform: scale(0.94); }
+.ad-btn b { font-size: calc(var(--u) * 1.2); font-weight: 700; }
+.ad-btn small { font-size: calc(var(--u) * 0.8); font-weight: 600; color: #fff6c8; }
+.ad-btn:disabled { filter: grayscale(0.8) brightness(0.85); }
 
 /* --- Big banner (jump made, run over) ---------------------------------------------------------- */
 .banner {
@@ -708,3 +730,116 @@
 .crashed .run-info { top: calc(var(--safe-t) + var(--top-push, 0px) + var(--u) * 15); }
 /* The walking controls step aside while riding (GAS / BRAKE take over). */
 body.is-riding .touch-cluster, body.is-riding .joy-base, body.is-riding .touch-left { display: none !important; }
+
+/* --- Route: coins, bonus pops, lean meter, bend sign, hazard alert, junction, lean buttons --- */
+.run-coins { font-size: calc(var(--u) * 1.6); font-weight: 700; color: #ffd23a; min-height: 1em; display: inline-block; }
+.run-coins.pop { animation: pop 0.22s ease; }
+.bonus-pop {
+  position: absolute;
+  top: calc(36% + var(--py, 0) * var(--u));
+  right: max(4vw, calc(var(--safe-r) + var(--u) * 2));
+  font-size: min(calc(var(--u) * 2.4 * var(--ps, 1)), 6.4vw);
+  font-weight: 700;
+  opacity: 0;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.bonus-pop.on { animation: bonusPop 1.6s ease-out forwards; }
+@keyframes bonusPop {
+  0% { opacity: 0; transform: translateX(30%) scale(0.4); }
+  14% { opacity: 1; transform: translateX(0) scale(1.15); }
+  24% { transform: scale(1); }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(calc(var(--u) * -3)); }
+}
+.lean-meter {
+  position: absolute;
+  bottom: calc(var(--safe-b) + var(--u) * 12.2);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(var(--u) * 15), 40vw);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+.lean-meter.on { opacity: 1; }
+.lean-meter svg { width: 100%; display: block; filter: drop-shadow(0 calc(var(--u) * 0.2) 0 rgba(0, 0, 0, 0.55)); }
+.lean-meter .needle { transition: transform 0.06s linear; }
+.lean-meter b { display: block; font-size: calc(var(--u) * 1.05); font-weight: 700; margin-top: calc(var(--u) * -0.2); }
+.lean-meter.danger svg { animation: blink 0.18s steps(2) infinite; }
+.touch-ui .lean-meter b { display: none; }
+.bend-sign {
+  position: absolute;
+  top: calc(var(--safe-t) + var(--top-push, 0px) + var(--u) * 29);
+  right: max(3vw, calc(var(--safe-r) + var(--u) * 1.5));
+  padding: calc(var(--u) * 0.5) calc(var(--u) * 1);
+  border-radius: calc(var(--u) * 0.5);
+  background: #ffc21a;
+  border: calc(var(--u) * 0.25) solid #1a1a1a;
+  color: #fff;
+  font-size: calc(var(--u) * 1.7);
+  font-weight: 700;
+  display: none;
+}
+.bend-sign.on { display: block; }
+.bend-sign.hot { background: #e8333a; animation: pulse 0.3s infinite alternate; }
+.hz-alert {
+  position: absolute;
+  top: calc(var(--safe-t) + var(--top-push, 0px) + var(--u) * 24);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: calc(var(--u) * 0.5) calc(var(--u) * 1.6);
+  border-radius: 99px;
+  font-size: min(calc(var(--u) * 2.3), 5.6vw);
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  display: none;
+  pointer-events: none;
+  border: calc(var(--u) * 0.25) solid rgba(0, 0, 0, 0.6);
+}
+.hz-alert.on { display: block; }
+.hz-alert[data-kind='stop'] { background: #d11a1a; animation: pulse 0.35s infinite alternate; }
+.hz-alert[data-kind='go'] { background: #1fa81c; }
+.hz-alert[data-kind='info'] { background: #2f6fd0; }
+.junction { display: none; position: absolute; top: 46%; left: 0; right: 0; pointer-events: none; }
+.junction.on { display: block; }
+.j-btn {
+  position: absolute;
+  pointer-events: auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: calc(var(--u) * 0.6) calc(var(--u) * 1.2);
+  border-radius: calc(var(--u) * 0.6);
+  border: calc(var(--u) * 0.25) solid rgba(0, 0, 0, 0.6) !important;
+  font-size: min(calc(var(--u) * 2), 5vw);
+  font-weight: 700;
+  color: #fff;
+  opacity: 0.75;
+  touch-action: none;
+  line-height: 1.05;
+}
+.j-btn small { display: block; font-size: 55%; opacity: 0.85; }
+.touch-ui .j-btn small { display: none; }
+.j-btn.left { left: max(3vw, calc(var(--safe-l) + var(--u) * 1)); background: linear-gradient(#5aa8ff, #1f5fd0); }
+.j-btn.right { right: max(3vw, calc(var(--safe-r) + var(--u) * 1)); background: linear-gradient(#ff7ae0, #b01fd0); }
+.j-btn.sel { opacity: 1; transform: scale(1.12); box-shadow: 0 0 0 calc(var(--u) * 0.35) #ffe066; }
+.lean-btn {
+  position: absolute;
+  bottom: calc(var(--safe-b) + var(--u) * 11.4);
+  width: max(48px, calc(var(--u) * 6.4));
+  height: max(48px, calc(var(--u) * 6.4));
+  border-radius: 50%;
+  border: calc(var(--u) * 0.3) solid rgba(0, 0, 0, 0.6) !important;
+  background: linear-gradient(#ffe48a, #f0a21a);
+  font-size: calc(var(--u) * 2.2);
+  font-weight: 700;
+  color: #fff;
+  touch-action: none;
+}
+.lean-btn.left { left: calc(var(--safe-l) + var(--u) * 1.8); }
+.lean-btn.right { right: calc(var(--safe-r) + var(--u) * 1.8); }
+.lean-btn.held { filter: brightness(1.25); transform: scale(0.94); }
+.touch-ui .riding .boost-btn { bottom: calc(var(--safe-b) + var(--u) * 19.5); }
+.crashed .lean-meter, .crashed .bend-sign, .crashed .hz-alert, .crashed .junction, .crashed .bonus-pop { display: none !important; }

@@ -4,7 +4,7 @@
 // The run cash formula, Cart Upgrades, Shop stock, rebirth, quests and save slots
 // all live here; config.js holds their numbers.
 import {
-  BUNDLES, CARRY, DEFAULT_GEAR, DICE, ECONOMY, GEAR, INSTANT_MARKUP, PASSES, QUEST_LEVELS, QUESTS, REBIRTH, RESTOCK, SAVE_SLOTS, UPGRADE_BULK, UPGRADES, WHEEL,
+  BUNDLES, CARRY, DEFAULT_GEAR, LEAN, DICE, ECONOMY, GEAR, INSTANT_MARKUP, PASSES, QUEST_LEVELS, QUESTS, REBIRTH, RESTOCK, SAVE_SLOTS, UPGRADE_BULK, UPGRADES, WHEEL,
 } from './config.js'
 import { cartStats } from './cartPhysics.js'
 import { mulberry32 } from './textures.js'
@@ -31,7 +31,7 @@ function fresh() {
     rebirths: 0,
     passes: [],
     stats: { rides: 0, best: 0, gearBought: 0, wagonsBought: 0, spins: 0, boosts: 0, jumps: 0, totalDistance: 0, playtime: 0, upgradesBought: 0, invites: 0 },
-    upgrades: { dist: 0, mult: 0, cur: 0 },
+    upgrades: Object.fromEntries(UPGRADES.map((u) => [u.id, 0])),
     topRuns: [],
     lastGift: 0,
     spinAt: nowS() + 60, // first free spin a minute in
@@ -179,6 +179,12 @@ export function runPayout(distance, eventCash = 1) {
   return steps * upgradeValue('cur') * upgradeValue('mult') * cashMultiplier(eventCash)
 }
 
+// A skill bonus or pickup worth `m` metres of run pay (never less than $1), so it
+// grows with the Cart Upgrades and multipliers like the run itself.
+export function bonusCash(m, eventCash = 1) {
+  return Math.max(1, Math.round((m / upgradeValue('dist')) * upgradeValue('cur') * upgradeValue('mult') * cashMultiplier(eventCash)))
+}
+
 // --- Gear ----------------------------------------------------------------------------
 export const equippedGear = () => ({
   engine: gearById[state.equipped.engine],
@@ -186,8 +192,11 @@ export const equippedGear = () => ({
   wheels: gearById[state.equipped.wheels],
   booster: gearById[state.equipped.booster],
 })
-export function currentStats(eventSpeed = 1) {
-  return cartStats(equippedGear(), state.wagons + state.goldenCarts, { fuelSaver: hasPass('fuel'), fuelBonus: state.fuelNextRun ? 1.5 : 1, speed: eventSpeed })
+// rain: a Thunderstorm makes the rails slippery in the bends (LEAN.rainGrip).
+export function currentStats(eventSpeed = 1, rain = false) {
+  const mods = { fuelSaver: hasPass('fuel'), fuelBonus: state.fuelNextRun ? 1.5 : 1, speed: eventSpeed, grip: rain ? LEAN.rainGrip : 1 }
+  for (const u of UPGRADES) if (u.kind === 'cart') mods[u.stat] = upgradeValue(u.id)
+  return cartStats(equippedGear(), state.wagons + state.goldenCarts, mods)
 }
 export const isDiscovered = (id) => state.discovered.includes(id)
 export function giveGear(id, n = 1) {
@@ -334,7 +343,7 @@ export function rebirth(skip = false) {
   state.owned = owned
   state.equipped = { ...DEFAULT_GEAR }
   state.wagons = 0
-  state.upgrades = { dist: 0, mult: 0, cur: 0 }
+  state.upgrades = Object.fromEntries(UPGRADES.map((u) => [u.id, 0]))
   state.fuelNextRun = false
   state.rebirths++
   state.goldenCarts++
@@ -397,6 +406,12 @@ export function awardPrize(i) {
   return `${g.name}!`
 }
 export const cashBoostLeft = () => Math.max(0, state.cashBoostUntil - nowS())
+// A watched rewarded ad (ads.js): 2x run cash for `seconds` more (stacks with the wheel's boost).
+export function grantCashBoost(seconds) {
+  state.cashBoostUntil = Math.max(state.cashBoostUntil, nowS()) + seconds
+  changed('boost')
+  return seconds
+}
 
 // Mystery Dice: one random gear from the dice pool, rarer = less likely.
 const DICE_WEIGHT = { common: 30, uncommon: 24, rare: 16, epic: 9, legendary: 4, mythic: 1.5 }
