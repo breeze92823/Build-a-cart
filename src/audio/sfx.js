@@ -1398,3 +1398,67 @@ export const tunnelEnter = safe(function tunnelEnter() {
   burst({ t, noise: 'pink', f: 1900, f2: 280, q: 0.9, a: 0.03, d: 0.35, gain: 0.22, verb: 0.35 })
   ;[[0.11, 0.4, -0.4], [0.23, 0.22, 0.4], [0.37, 0.12, -0.3]].slice(0, few(3, 2)).forEach(([dt, g, pan]) => burst({ t: t + dt, noise: 'brown', type: 'lowpass', f: 260, f2: 90, q: 0.8, a: 0.01, d: 0.25, gain: 0.55 * g, pan }))
 })
+
+// --- Cart feel (cartFeel.js cues, ride.js / remote.js) -------------------------------------------
+// One axle over a rail joint (k 0..1 with speed): the iron wheel drops into the gap and rings.
+// On a timber trestle (wood) it is a hollow knock on the bent instead.
+export const railJoint = safe(function railJoint(k = 0.5, wood = false) {
+  k = clamp(k, 0, 1, 0)
+  if (!limit('railJoint', 28) || !voice(0.12, 1)) return
+  const t = now()
+  if (wood) {
+    modal({ t, f: rnd(110, 150), modes: WOOD, gain: 0.14 + 0.14 * k, strike: 0.2, bus: A.engine })
+    tone({ t, f: 62, f2: 40, d: 0.08, gain: 0.12 + 0.1 * k, bus: A.engine })
+    return
+  }
+  modal({ t, f: rnd(150, 190), modes: [[1, 1, 0.07], [2.7, 0.5, 0.04], [5.2, 0.25, 0.02]], gain: 0.16 + 0.18 * k, strike: 0.15, bus: A.engine })
+  tone({ t, f: 70, f2: 42, d: 0.06, gain: 0.16 + 0.14 * k, bus: A.engine })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 600, d: 0.04, gain: 0.1 * k, bus: A.engine })
+})
+
+// A coupler running out of slack (k 0..1, i = which cart down the train: further = softer, duller):
+// a heavy iron clank, the pins rattling, a dull thud through the frames.
+export const coupler = safe(function coupler(k = 0.5, i = 0) {
+  k = clamp(k, 0, 1, 0) / (1 + i * 0.35)
+  if (k < 0.05 || !limit('coupler', 45) || !voice(0.5, 2)) return
+  const t = now()
+  modal({ t, f: vary(480 - i * 25, 0.05), modes: IRON, gain: 0.08 + 0.18 * k, decay: 0.35, strike: 0.55, beat: 7, verb: 0.15 })
+  tone({ t, f: 95, f2: 48, d: 0.12, gain: 0.12 + 0.25 * k })
+  burst({ t: t + 0.015, noise: 'brown', type: 'lowpass', f: 900, d: 0.06, gain: 0.12 * k })
+  if (!COARSE_POINTER) burst({ t: t + 0.03, type: 'highpass', f: 3200, q: 0.7, a: 0.002, d: 0.05, gain: 0.05 * k }) // pins rattling
+})
+
+// Wheels meeting the rails at the wrong speed after airtime: a short steel squeal and a hiss.
+export const wheelChirp = safe(function wheelChirp(k = 0.5) {
+  k = clamp(k, 0, 1, 0)
+  if (k < 0.05 || !limit('chirp', 150) || !voice(0.4, 2)) return
+  const t = now()
+  const f = rnd(2300, 2900)
+  tone({ t, f, f2: f * 0.78, glide: 0.18 + k * 0.15, a: 0.005, hold: 0.04 + k * 0.08, d: 0.12, gain: 0.04 + 0.08 * k })
+  tone({ t, f: f * 1.51, f2: f * 1.2, glide: 0.2, a: 0.005, hold: 0.03, d: 0.1, gain: 0.015 + 0.03 * k })
+  burst({ t, type: 'highpass', f: 4200, q: 0.6, a: 0.005, d: 0.2 + k * 0.2, gain: 0.05 + 0.06 * k })
+})
+
+// Lifting off the throttle at revs: unburnt fuel popping in the exhaust (two or three pops).
+export const backfire = safe(function backfire(k = 1) {
+  k = clamp(k, 0, 1, 0)
+  if (!limit('backfire', 700) || !voice(0.6, 2)) return
+  const t = now()
+  const n = 1 + Math.floor(Math.random() * 3)
+  for (let i = 0; i < n; i++) {
+    const at = t + i * rnd(0.07, 0.15)
+    const g = (0.3 + 0.3 * k) / (1 + i * 0.5)
+    burst({ t: at, noise: 'brown', type: 'lowpass', f: 1400, f2: 300, q: 0.7, a: 0.001, d: 0.07, gain: g, bus: A.engine, verb: 0.15 })
+    tone({ t: at, f: rnd(110, 150), f2: 50, d: 0.06, gain: g * 0.6, bus: A.engine })
+    burst({ t: at, type: 'highpass', f: 2500, q: 0.5, a: 0.001, d: 0.025, gain: g * 0.25, bus: A.engine })
+  }
+})
+
+// A piece of crashed cart landing (k 0..1): iron or wood skittering on the ground.
+export const debris = safe(function debris(k = 0.5) {
+  k = clamp(k, 0, 1, 0)
+  if (k < 0.05 || !limit('debris', 55) || !voice(0.3, 1)) return
+  const t = now()
+  modal({ t, f: rnd(300, 1100), modes: Math.random() < 0.6 ? IRON : WOOD, gain: 0.03 + 0.08 * k, strike: 0.4, pan: rnd(-0.6, 0.6), verb: 0.15 })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 500, d: 0.06, gain: 0.08 * k })
+})

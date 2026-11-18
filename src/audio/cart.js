@@ -2,13 +2,13 @@
 //  - motor: the exhaust worklet (worklet.js), rpm/load from speed and throttle,
 //    voiced per engine (a rusty single-pot putter up to a burbling V8); jets and
 //    rockets add a turbine/rocket roar of shaped noise instead
-//  - rails: a low rolling rumble, a faint steel ring at speed, and the
-//    clack-clack of every rail joint (front then back axle) - the signature sound
+//  - rails: a low rolling rumble and a faint steel ring at speed (the clack-clack of
+//    the rail joints is cued per axle by ride.js: sfx.railJoint)
 //  - wind rushing past, louder at speed and in the air
 //  - brake squeal (narrow, wobbling band of noise) while braking at speed
 //  - booster roar while a booster burns
 import { A, onStart } from './core.js'
-import { burst, modal, rnd, saturation, tone } from './synth.js'
+import { saturation } from './synth.js'
 import { WORKLET } from './worklet.js'
 
 // idle/max rpm, motor level, roar level (turbine/rocket noise), whine (turbine tone).
@@ -54,9 +54,9 @@ const VOICE = {
   firerocket: 'rocket',
   firebarrel: 'rocket',
 }
-const profileFor = (id) => PROFILES[id] ?? PROFILES[VOICE[id]] ?? PROFILES.rusty
+export const profileFor = (id) => PROFILES[id] ?? PROFILES[VOICE[id]] ?? PROFILES.rusty
 
-const s = { ok: false, joint: 0, misfire: 0 }
+const s = { ok: false, misfire: 0 }
 const K = 0.05
 
 function loop(kind, stereo = false) {
@@ -162,8 +162,7 @@ onStart(async (ctx) => {
 })
 
 // st: { riding, engine (id), speed m/s (signed), top, throttle 0..1, brake 0..1,
-//       air, boosting, fuel (bool: has fuel), dist travelled this frame (m),
-//       wood (on a timber trestle: a hollow knock at every bent instead) }
+//       air, boosting, fuel (bool: has fuel) }
 export function update(dt, st) {
   if (!s.ok || !A.ctx) return
   const t = A.ctx.currentTime
@@ -176,9 +175,11 @@ export function update(dt, st) {
   // Misfires for the old motors: the rpm stumbles now and then.
   if (running && P.sputter && Math.random() < P.sputter * dt * 6) s.misfire = 0.25
   s.misfire = Math.max(0, s.misfire - dt)
-  const rpm = P.idle + (P.max - P.idle) * Math.min(1, f * 0.75 + thr * 0.25 + (st.boosting ? 0.15 : 0)) * (s.misfire > 0 ? 0.7 : 1)
+  // In the air the wheels spin free: on the gas the engine flares up, unloaded.
+  const free = st.air ? thr * 0.3 : 0
+  const rpm = P.idle + (P.max - P.idle) * Math.min(1, f * 0.75 + thr * 0.25 + free + (st.boosting ? 0.15 : 0)) * (s.misfire > 0 ? 0.7 : 1)
   s.rpm.setTargetAtTime(rpm, t, K)
-  s.load.setTargetAtTime(Math.min(1, 0.12 + thr * 0.88), t, K)
+  s.load.setTargetAtTime(Math.min(1, 0.12 + thr * (st.air ? 0.45 : 0.88)), t, K)
   s.tone.frequency.setTargetAtTime(P.tone * (0.6 + thr * 1.4 + f * 0.6), t, K)
   s.motor.gain.setTargetAtTime(running * P.motor * (0.45 + 0.55 * thr) * (s.misfire > 0 ? 0.4 : 1), t, K)
   s.roarF.frequency.setTargetAtTime(220 + (thr * 0.6 + f * 0.4) * 900, t, K)
@@ -196,30 +197,5 @@ export function update(dt, st) {
   s.wind.gain.setTargetAtTime(on * (st.air ? 0.55 : 0.35) * windK * windK, t, 0.15)
   s.screech.gain.setTargetAtTime(grounded * st.brake * 0.12 * Math.min(1, v / 8), t, 0.04)
   s.boost.gain.setTargetAtTime(on && st.boosting ? 0.5 : 0, t, st.boosting ? 0.03 : 0.25)
-
-  // Rail joints every 12 m: the front axle, then the back one a wheelbase later.
-  // On a trestle the rails knock over every bent (3.6 m), hollow and woody.
-  if (grounded && v > 1.5 && st.wood) {
-    s.joint += st.dist
-    if (s.joint >= 3.6) {
-      s.joint -= 3.6
-      if (v < 70 || Math.random() < 0.5) {
-        const k = Math.min(1, v / 30)
-        modal({ t: t + 0.005, f: rnd(110, 150), modes: [[1, 1, 0.09], [2.57, 0.45, 0.04], [4.2, 0.2, 0.02]], gain: 0.16 + 0.16 * k, strike: 0.2, bus: A.engine })
-        tone({ t: t + 0.005, f: 62, f2: 40, d: 0.08, gain: 0.14 + 0.12 * k, bus: A.engine })
-      }
-    }
-  } else if (grounded && v > 1.5) {
-    s.joint += st.dist
-    if (s.joint >= 12) {
-      s.joint -= 12
-      const k = Math.min(1, v / 30)
-      const gap = Math.min(0.25, 1.64 / v)
-      for (const at of [t + 0.005, t + 0.005 + gap]) {
-        modal({ t: at, f: rnd(150, 190), modes: [[1, 1, 0.07], [2.7, 0.5, 0.04], [5.2, 0.25, 0.02]], gain: 0.18 + 0.2 * k, strike: 0.15, bus: A.engine })
-        tone({ t: at, f: 70, f2: 42, d: 0.06, gain: 0.18 + 0.15 * k, bus: A.engine })
-        burst({ t: at, noise: 'brown', type: 'lowpass', f: 600, d: 0.04, gain: 0.12 * k, bus: A.engine })
-      }
-    }
-  }
+  // Rail joints are cued per axle by ride.js (cartFeel.js), in step with the body's bumps: sfx.railJoint.
 }

@@ -416,6 +416,42 @@ export const CART = {
   safeS: 130, // where a revive puts you back (before the ramp)
 }
 
+// --- How a cart feels (cartFeel.js, visual + audio only: never touches the ride physics) -------
+// Each cart body sits on springs above its wheels: it squats under throttle and dives under the
+// brake, compresses in dips and floats over crests, bounces on landings and knocks over every rail
+// joint (front axle, then back axle). The wheels spin freely in the air (the engine revs them) and
+// chirp when they meet the rails at the wrong speed; locked by the brake they skid. Trailing carts
+// hang on couplers with a little slack: they bunch up under the brake and snap taut under power,
+// clanking down the train.
+export const CART_FEEL = {
+  freq: 4.2, // Hz, body bounce
+  damp: 0.32, // damping ratio (under 1 = it bounces a couple of times)
+  heaveLoad: 0.0016, // m of squash per m/s^2 of rail load (v^2 x profile curvature)
+  heaveMax: 0.12, // m
+  airLift: 0.05, // m the body rises on its springs while the wheels hang in the air
+  squat: 0.0045, // rad of pitch per m/s^2 of acceleration (nose up under power, down under the brake)
+  pitchMax: 0.07, // rad
+  landKick: 1.1, // m/s of downward body speed on a touchdown (x 0.3..1.3 with the airtime)
+  jointGap: 12, // m between rail joints (wood: jointGapWood between trestle bents)
+  jointGapWood: 3.6,
+  axle: 0.82, // m from the cart centre to each axle
+  jointKick: 0.16, // m/s body speed per joint at speed
+  jointPitch: 0.06, // rad/s pitch speed per joint at speed
+  engineShake: 0.012, // m engine block shake at full throttle
+  airRev: 26, // m/s^2 the engine spins free wheels up in the air
+  airRevMax: 95, // m/s wheel surface speed cap in the air
+  airSpinDecay: 0.35, // 1/s free wheels slow down in the air
+  chirpFrom: 5, // m/s wheel / rail speed mismatch on touchdown that chirps
+  lockFrom: 8, // m/s: braking above this locks the wheels (they skid)
+  slack: 0.16, // m each coupler can give either way
+  slackSpring: 22, // 1/s^2 centring of the slack
+  slackDamp: 3.5,
+  slackLag: 0.07, // s per cart down the train before a jerk reaches it
+  clankMin: 0.35, // m/s closing speed that clanks a coupler
+  clankFull: 2.2,
+  backfireFrom: 16, // m/s: lifting off the throttle above this can pop the exhaust
+}
+
 // --- Leaning into bends (cartPhysics.js) ---------------------------------------------------
 // In a bend the cart is pushed outwards by v^2 * curvature (m/s^2). Leaning (A / D,
 // the lean buttons) cancels up to `accel` of it; the rest is carried by the wheels'
@@ -901,8 +937,12 @@ export const AUDIO = {
   storageKey: 'build-a-cart.sound',
   buses: { ui: 0.8, sfx: 0.9, amb: 0.5, engine: 0.55 },
   duck: 0.45,
-  maxVoices: 48,
-  maxVoicesTouch: 24,
+  maxVoices: 32, // one-shots at once (a hard cap; low-priority ticks get a smaller share)
+  maxVoicesTouch: 18,
+  // Master chain (audio/core.js): headroom before the compressors, trim takes their
+  // automatic makeup gain back off, a soft clipper (linear below clipKnee) rounds any
+  // last peak. freeVoices: one-shots that sound at full level before the buses step down.
+  mix: { headroom: 0.7, trim: 0.9, clipKnee: 0.7, freeVoices: 4 },
   latency: 0.04,
   latencyTouch: 0.07,
   lead: 0.02,

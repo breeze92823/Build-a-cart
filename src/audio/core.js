@@ -27,6 +27,7 @@ export const A = {
 }
 
 const startHooks = []
+const oneShotBuses = [] // [bus, base gain]: see autoGain
 let ducked = false // menu window open: see setDucked
 // fn(ctx) runs once the context exists (immediately if it already does).
 export function onStart(fn) {
@@ -102,6 +103,23 @@ function makeNoise(ctx, seconds, kind, channels = 1) {
   return buf
 }
 
+// Output safety: straight through below `knee`, then a smooth bend that never
+// passes 1, so a peak is rounded off instead of clipped flat (which is the harsh,
+// "broken speaker" crackle). A WaveShaper reads its curve over input -1..1, so the
+// signal is halved on the way in (clipIn) and the curve covers -2..2 of the real level.
+function softClip(knee) {
+  const n = 4096
+  const c = new Float32Array(n)
+  const room = 1 - knee
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 4 - 2 // real level -2..2 (shaper input -1..1)
+    const ax = Math.abs(x)
+    const y = ax <= knee ? ax : knee + room * Math.tanh((ax - knee) / room)
+    c[i] = Math.sign(x) * y
+  }
+  return c
+}
+
 // Stereo impulse response: pre-delay, sparse early reflections, then a noise
 // tail whose high end dies first (air + sand absorb the highs).
 function makeImpulse(ctx) {
@@ -156,21 +174,37 @@ function buildGraph() {
   A.noise.pinkStereo = makeNoise(ctx, 6, 'pink', 2)
   A.noise.brownStereo = makeNoise(ctx, 6, 'brown', 2)
 
+  // Master chain. Overlapping sounds used to crackle here: a DynamicsCompressor adds
+  // its own automatic makeup gain (several dB at these settings) and a 2 ms attack
+  // lets transients through, so a stack of one-shots went past 0 dBFS and hard-clipped
+  // at the output; the 100 ms release on top made the level pump audibly. Now: headroom
+  // first, a gentle glue, a limiter with a soft knee and an unhurried release, the
+  // makeup gain taken back off, and a soft clipper last so a peak that still slips
+  // through is rounded off instead of squared off.
+  const M = AUDIO.mix
+  const headroom = ctx.createGain()
+  headroom.gain.value = M.headroom
   const glue = ctx.createDynamicsCompressor() // gentle bus glue
-  glue.threshold.value = -18
-  glue.knee.value = 12
-  glue.ratio.value = 2.5
-  glue.attack.value = 0.01
-  glue.release.value = 0.25
-  const limit = ctx.createDynamicsCompressor() // brick wall so a stack of rewards never clips
-  limit.threshold.value = -3
-  limit.knee.value = 0
+  glue.threshold.value = -20
+  glue.knee.value = 18
+  glue.ratio.value = 2
+  glue.attack.value = 0.02
+  glue.release.value = 0.3
+  const limit = ctx.createDynamicsCompressor() // catches stacks of rewards
+  limit.threshold.value = -8
+  limit.knee.value = 6
   limit.ratio.value = 20
-  limit.attack.value = 0.002
-  limit.release.value = 0.1
+  limit.attack.value = 0.003
+  limit.release.value = 0.25
+  const trim = ctx.createGain() // takes the compressors' makeup gain back off
+  trim.gain.value = M.trim
+  trim.gain.value *= 0.5 // clipIn: see softClip
+  const clip = ctx.createWaveShaper()
+  clip.curve = softClip(M.clipKnee)
+  clip.oversample = '2x'
   const master = ctx.createGain()
   master.gain.value = 0
-  master.connect(glue).connect(limit).connect(ctx.destination)
+  master.connect(headroom).connect(glue).connect(limit).connect(trim).connect(clip).connect(ctx.destination)
 
   const bus = (gain, to = master) => {
     const g = ctx.createGain()
@@ -180,6 +214,7 @@ function buildGraph() {
   }
   A.ui = bus(AUDIO.buses.ui)
   A.sfx = bus(AUDIO.buses.sfx)
+  oneShotBuses.push([A.ui, AUDIO.buses.ui], [A.sfx, AUDIO.buses.sfx]) // kept even while sfxAt swaps A.sfx
   A.world = bus(ducked ? AUDIO.duck : 1)
   A.amb = bus(AUDIO.buses.amb, A.world)
   A.engine = bus(AUDIO.buses.engine, A.world)
@@ -238,11 +273,34 @@ export function setDucked(on) {
 
 // One-shot voice budget: a burst of rewards on a weak phone skips the extras
 // instead of crackling. Returns false when the voice should not play.
+// `priority` (1..5) picks how much of the budget a sound may use: small ticks and
+// taps drop out first, big moments (crash, rebirth) still get through. The budget
+// is a hard ceiling (it used to be multiplied by the priority, so up to 5x it).
 const MAX_VOICES = COARSE_POINTER ? AUDIO.maxVoicesTouch : AUDIO.maxVoices
 export function voice(seconds, priority = 1) {
   if (!ready()) return false
-  if (A.voices > MAX_VOICES * priority) return false
+  const share = Math.min(1, 0.5 + 0.125 * priority)
+  if (A.voices >= Math.ceil(MAX_VOICES * share)) return false
   A.voices++
-  setTimeout(() => A.voices--, seconds * 1000 + 50)
+  autoGain()
+  setTimeout(() => {
+    A.voices--
+    autoGain()
+  }, seconds * 1000 + 50)
   return true
+}
+
+// Many one-shots at once add up far past what one sounds like: the one-shot buses
+// step down as voices stack (about -3 dB per doubling past a few), so the limiter
+// only has to catch peaks instead of squashing (pumping) the whole mix.
+function autoGain() {
+  if (!oneShotBuses.length) return
+  const M = AUDIO.mix
+  const extra = Math.max(0, A.voices - M.freeVoices)
+  const k = 1 / Math.sqrt(1 + extra / M.freeVoices)
+  const t = A.ctx.currentTime
+  for (const [bus, base] of oneShotBuses) {
+    bus.gain.cancelScheduledValues(t)
+    bus.gain.setTargetAtTime(base * k, t, extra > 0 ? 0.015 : 0.12) // quick down, slow back up
+  }
 }

@@ -836,11 +836,15 @@ export function buildGhost(g) {
 // gear: { engine, fuel, wheels, booster } GEAR entries (any may be missing = bare).
 export function buildCart(gear = {}, { color = '#1d2846', stripe = '#ff2a3a' } = {}) {
   const root = new Group()
-  const tilt = new Group() // pitches with the slope; the root sits on the rails
-  root.add(tilt)
+  // root sits on the rails; rail pitches with the slope and carries the wheels (unsprung);
+  // tilt is the body on its springs (cartFeel.js bounces it), with everything bolted to it.
+  const rail = new Group()
+  const tilt = new Group()
+  root.add(rail)
+  rail.add(tilt)
   body(tilt, color, stripe)
   chassis(tilt, gear.engine ? 0.9 : 0, gear.fuel ? 0.7 : 0)
-  const wheels = wheelSet(tilt, gear.wheels)
+  const wheels = wheelSet(rail, gear.wheels)
   const exhausts = []
   const flames = []
   const parts = {}
@@ -865,7 +869,7 @@ export function buildCart(gear = {}, { color = '#1d2846', stripe = '#ff2a3a' } =
       flames.push(new Vector3(side * (BODY.wid / 2 + 0.32), gear.booster.id === 'twinnitro' ? 1.1 : 1.05, 0.65))
     }
   }
-  root.userData = { tilt, parts, spin: wheels.spin, hover: wheels.hover, exhausts, flames, nozzle, seat: new Vector3(0, 0.78, 0.1) }
+  root.userData = { rail, tilt, parts, wheelR: WHEEL_R, spin: wheels.spin, hover: wheels.hover, exhausts, flames, nozzle, seat: new Vector3(0, 0.78, 0.1) }
   return root
 }
 

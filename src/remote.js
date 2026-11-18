@@ -9,10 +9,12 @@
 //     sparks, dust, a crash (explosion, the cart is gone) and a revive,
 //   * a name tag, chat bubbles (Bloxity chat) and the portal's emotes (avatar/emotes.js).
 // Never throws: a missing field or a failed look just leaves the stand-in character.
-import { Group } from 'three'
-import { BASES, CART, CAVE, LEAN, MULTI, NET, TRACK } from './config.js'
+import { Group, Vector3 } from 'three'
+import { BASES, CART, CART_FEEL, CAVE, LEAN, MULTI, NET, TRACK } from './config.js'
 import { laneX, laneXSlope, trackHeight } from './cartPhysics.js'
-import { buildCart, buildWagon, WHEEL_R } from './cartModel.js'
+import { buildCart, buildWagon } from './cartModel.js'
+import { CartFeel } from './cartFeel.js'
+import { sfx, sfxAt } from './audio/index.js'
 import { RAIL_TOP, canvasSprite } from './track.js'
 import { zAt } from './world.js'
 import { net } from './net.js'
@@ -28,6 +30,9 @@ const CAVE_Z = CAVE.mouth.z0 + 1 // z from which a walker is in the cave tunnel 
 const angleDelta = (from, to) => Math.atan2(Math.sin(to - from), Math.cos(to - from))
 const hasGear = (id) => !!id && !!gearById[id]
 const railY = (s) => (s < 0 ? 0 : trackHeight(s))
+// Rails on timber knock hollow (same stretches as ride.js).
+const supportWood = (s) => (s > TRACK.river.s0 - 50 && s < TRACK.river.s1 + 50) || (s > TRACK.gorge.s0 + 10 && s < TRACK.mine.s0)
+const WHEELS = [new Vector3(-0.75, 0.05, -0.82), new Vector3(0.75, 0.05, -0.82), new Vector3(-0.75, 0.05, 0.82), new Vector3(0.75, 0.05, 0.82)]
 
 // --- Breadcrumbs of the lead cart's path: the trailing carts follow them (same idea as ride.js) -------
 const TRAIL = 512
@@ -133,6 +138,17 @@ class Remote {
     this.smokeAcc = 0
     this.sparkAcc = 0
     this.crashed = false
+    // The body on its springs, wheels and couplers (cartFeel.js), and what its sounds need.
+    this.feel = new CartFeel()
+    this.wagonAt = []
+    this.feelIn = { s: 0, v: 0, air: false, throttle: 0, brake: 0, fuel: false, wood: false, wagons: this.wagonAt }
+    this.lastThrottle = 0
+    this.lastBoost = false
+    this.air = false
+    this.airT = 0
+    this.dist = 1e9
+    this.closing = 0
+    this.pan = 0
     this.setAvatar(buildDefaultCharacter())
   }
 
@@ -226,6 +242,8 @@ class Remote {
       this.root.add(w)
       this.wagons.push(w)
     }
+    this.feel.setWagons(wagons)
+    while (this.wagonAt.length < wagons) this.wagonAt.push({ s: 0, air: false })
     this.trail.reset()
     this.parkedS = wagons * CART.wagonGap + 0.5
     this.placed = false
@@ -246,16 +264,19 @@ class Remote {
     c.position.set(this.cartX(s), y + RAIL_TOP + (c.userData.hover ? 0.25 : 0), zAt(s))
     c.rotation.y = this.cartYaw(s)
     c.rotation.z = roll
-    c.userData.tilt.rotation.x = pitch
-    for (const w of c.userData.spin) w.rotation.x -= (spinV / WHEEL_R) * dt
+    c.userData.rail.rotation.x = pitch
     this.wagons.forEach((w, i) => {
-      const q = this.riding ? this.trail.at((i + 1) * CART.wagonGap) : { s: s - (i + 1) * CART.wagonGap, y: railY(s - (i + 1) * CART.wagonGap), pitch: 0 }
+      const q = this.riding ? this.trail.at((i + 1) * CART.wagonGap + this.feel.back(i)) : { s: s - (i + 1) * CART.wagonGap, y: railY(s - (i + 1) * CART.wagonGap), pitch: 0 }
       w.visible = visible
       w.position.set(this.cartX(q.s), q.y + RAIL_TOP, zAt(q.s))
       w.rotation.y = this.cartYaw(q.s)
       w.rotation.z = roll * 0.6
-      w.userData.tilt.rotation.x = q.pitch
-      for (const wh of w.userData.spin) wh.rotation.x -= (spinV / WHEEL_R) * dt
+      w.userData.rail.rotation.x = q.pitch
+      const at = this.wagonAt[i]
+      if (at) {
+        at.s = q.s
+        at.air = q.y - railY(q.s) > 0.08
+      }
     })
   }
 
@@ -296,6 +317,7 @@ class Remote {
   updateFoot(p, dt, ctx) {
     const s = this.parkedS
     this.placeCart(s, railY(s), 0, 0, 0, dt, true)
+    this.feel.rest(this.cart, this.wagons)
     // Walking: outside the cave the walk is shifted onto this player's base; in the cave / tunnel it is
     // at its true spot, and only shown to a viewer who is in the cave as well.
     const inCave = p.z >= CAVE_Z
@@ -348,6 +370,10 @@ class Remote {
       this.v = p.v
       this.trail.reset()
       this.trail.push(this.s - 0.5, railY(this.s - 0.5), 0)
+      this.feel.reset(this.s)
+      this.lastBoost = !!p.boosting
+      this.lastThrottle = p.throttle ?? 0
+      this.air = !!p.air
       this.placed = true
     }
     const k = 1 - Math.exp(-NET.remoteLerp * dt)
@@ -367,8 +393,12 @@ class Remote {
       this.crashed = false
       const c = this.cart.position
       ctx.fx.confetti({ x: c.x, y: c.y + 1.5, z: c.z }, 24, 0.5)
+      this.feel.reset(this.s)
+      this.hear(ctx, () => sfx.revive())
     }
     this.placeCart(this.s, this.y, this.pitch, this.roll, this.v, dt, !crashed)
+    this.listen(dt, ctx)
+    if (!crashed) this.cartFeel(p, dt, ctx)
     this.avatarRoot.visible = !crashed
     const cart = this.cart
     this.anchor.visible = !crashed
@@ -389,9 +419,98 @@ class Remote {
     return out
   }
 
+  // Where this cart is from the camera: distance, closing speed (Doppler) and pan.
+  listen(dt, ctx) {
+    const c = this.cart.position
+    const dx = c.x - ctx.cam.x
+    const dz = c.z - ctx.cam.z
+    const d = Math.hypot(dx, dz, c.y - ctx.cam.y)
+    if (this.dist < 1e8 && dt > 0) this.closing += ((this.dist - d) / dt - this.closing) * Math.min(1, dt * 6)
+    this.dist = d
+    this.pan = d > 0.5 ? (dx * ctx.right.x + dz * ctx.right.z) / Math.max(1, Math.hypot(dx, dz)) : 0
+  }
+  // A one-shot from this cart, placed by distance and side.
+  hear(ctx, fn) {
+    if (this.dist < MULTI.smokeRange * 1.5) sfxAt(this.dist, this.pan, fn)
+  }
+
+  // The springs, wheels and couplers, and what they cue: joints, clanks, chirps, landings, boosts, pops.
+  cartFeel(p, dt, ctx) {
+    const v = this.v
+    const air = !!p.air
+    const running = !!p.fuelOk && p.ride === 'riding'
+    const thr = running ? (p.throttle ?? 0) : 0
+    const fin = this.feelIn
+    fin.s = this.s
+    fin.v = v
+    fin.air = air
+    fin.throttle = thr
+    fin.brake = p.braking ? 1 : 0
+    fin.fuel = running
+    fin.wood = supportWood(this.s)
+    const out = this.feel.update(dt, fin)
+    this.feel.apply(this.cart, this.wagons, dt, running, thr)
+    const near = this.dist < MULTI.smokeRange
+    const { fx, tmp } = ctx
+    const carry = -Math.abs(v)
+    const speedK = Math.min(1, Math.abs(v) / 30)
+    if (this.dist < 60) for (let i = 0; i < Math.min(2, out.joints); i++) this.hear(ctx, () => sfx.railJoint(speedK, out.wood))
+    if (out.clank > 0 && out.clankAt >= 0) this.hear(ctx, () => sfx.coupler(out.clank, out.clankAt))
+    if (out.chirp > 0) {
+      this.hear(ctx, () => sfx.wheelChirp(out.chirp))
+      if (near) for (const w of WHEELS) fx.sparks(this.point(w, tmp), 2 + Math.round(out.chirp * 4), 0, carry * 0.85)
+    }
+    // Touchdown after airtime: the thud (ours is cued by the physics, theirs by the air flag).
+    if (air) this.airT += dt
+    else if (this.air) {
+      if (this.airT > 0.3) {
+        const k = Math.min(1, this.airT / 1.2)
+        this.hear(ctx, () => sfx.cartLand(0.35 + k * 0.6))
+        if (near) {
+          this.point(ctx.tmp2.set(0, 0.2, 0), tmp)
+          fx.sparks(tmp, Math.round(8 + k * 24), 0, carry * 0.8)
+          fx.ring(tmp, '#c9a77a', Math.round(10 + k * 16))
+        }
+      }
+      this.airT = 0
+    }
+    if (air && !this.air && Math.abs(v) > 20) this.hear(ctx, () => sfx.whoosh(Math.min(1, Math.abs(v) / 60)))
+    this.air = air
+    // Booster lighting up.
+    if (p.boosting && !this.lastBoost) {
+      this.feel.lead.pv += 0.55
+      this.hear(ctx, () => sfx.boost())
+      if (near) {
+        for (const f of this.cart.userData.flames) {
+          this.point(f, tmp)
+          for (let i = 0; i < 6; i++) fx.flame(tmp, (Math.random() - 0.5) * 2, (Math.random() - 0.2) * 1.5, carry * 0.9 + 10 + Math.random() * 6, 1.5, '#fff1b0', '#ff5a1a')
+        }
+      }
+    }
+    this.lastBoost = !!p.boosting
+    // Off the gas at speed: exhaust pops.
+    if (running && !air && this.lastThrottle > 0.6 && thr < 0.1 && Math.abs(v) > CART_FEEL.backfireFrom && Math.random() < 0.75) {
+      this.hear(ctx, () => sfx.backfire(Math.min(1, Math.abs(v) / 50)))
+      if (near) {
+        const tips = this.cart.userData.exhausts.length ? this.cart.userData.exhausts : this.cart.userData.nozzle ? [this.cart.userData.nozzle] : []
+        for (const e of tips) {
+          this.point(e, tmp)
+          for (let i = 0; i < 3; i++) fx.flame(tmp, 0, 0.4, carry * 0.96 + 3, 0.8, '#ffe08a', '#ff4a10')
+        }
+      }
+    }
+    this.lastThrottle = thr
+  }
+
   crashFx(ctx) {
+    this.listen(0, ctx)
     const p = this.point(ctx.tmp.set(0, 0.8, 0), ctx.tmp2)
     const kind = this.lastCrash || 'spikes'
+    this.hear(ctx, () => {
+      if (kind === 'splash') sfx.splash(2.4)
+      else if (kind === 'derail') sfx.derail()
+      else sfx.crash()
+    })
     if (kind === 'splash') ctx.fx.spray(p, 100)
     else ctx.fx.explosion(p, kind === 'spikes' ? 1.3 : 0.9)
     if (kind === 'derail') ctx.fx.sparks(p, 50)
@@ -433,8 +552,11 @@ class Remote {
     }
     // Brake sparks, dust and wheel sparks at speed.
     if (p.braking && !p.air && Math.abs(v) > 6 && Math.random() < 0.8) {
-      this.point(ctx.tmp2.set(Math.random() < 0.5 ? -0.75 : 0.75, 0.05, 0.82), tmp)
-      fx.sparks(tmp, 2, 0, -Math.abs(v) * 0.8)
+      const locked = Math.abs(v) > CART_FEEL.lockFrom
+      for (let i = locked ? 0 : 1; i < 2; i++) {
+        this.point(ctx.tmp2.set(Math.random() < 0.5 ? -0.75 : 0.75, 0.05, i ? 0.82 : -0.82), tmp)
+        fx.sparks(tmp, locked ? 3 : 2, 0, -Math.abs(v) * 0.8)
+      }
     }
     const speed01 = Math.min(1, Math.abs(v) / 45)
     if (!p.air && Math.abs(v) > 12 && Math.random() < speed01 * 0.5) {
@@ -474,7 +596,12 @@ export function createRemotePlayers(scene, { fx, tracks }) {
   let announced = false
   let joinedAt = 0
   let wasConnected = false
-  const ctx = { fx, cam: null, t: 0, viewerInCave: false, tmp: null, tmp2: null, tmp3: null }
+  const ctx = { fx, cam: null, right: { x: 1, z: 0 }, t: 0, viewerInCave: false, tmp: null, tmp2: null, tmp3: null }
+  const look = new Vector3()
+  let heard = null // the remote cart the shared engine voice follows (audio/remote.js)
+  let heardP = null
+  let heardScore = 0
+  const heardState = { dist: 0, pan: 0, v: 0, top: 45, throttle: 0, engine: '', fuel: false, air: false, closing: 0 }
 
   const freeBase = () => MULTI.basePrefs.find((b) => !taken.has(b) && b !== BASES.home)
 
@@ -507,10 +634,17 @@ export function createRemotePlayers(scene, { fx, tracks }) {
       return false
     },
     // cam: the camera's world position (effects spawn near it); viewer: the local player's position;
-    // vecs: three scratch Vector3s (no per-frame allocation).
-    update(dt, t, cam, viewer, vecs) {
+    // vecs: three scratch Vector3s (no per-frame allocation); camera (optional): pans their sounds.
+    update(dt, t, cam, viewer, vecs, camera) {
       const players = net.players
       const mine = net.sessionId
+      heard = null
+      if (camera) {
+        camera.getWorldDirection(look)
+        const n = Math.hypot(look.x, look.z) || 1
+        ctx.right.x = -look.z / n
+        ctx.right.z = look.x / n
+      }
       if (!players || !net.connected) {
         if (wasConnected) for (const id of [...remotes.keys()]) drop(id)
         wasConnected = false
@@ -546,12 +680,36 @@ export function createRemotePlayers(scene, { fx, tracks }) {
         r.lastCrash = p.crash
         try {
           r.update(p, dt, t, ctx)
+          // The loudest riding cart gets the engine voice.
+          if (r.riding && !r.crashed && r.dist < 140) {
+            const score = (0.4 + 0.6 * (p.throttle ?? 0)) / (1 + (r.dist / 16) ** 2)
+            if (!heard || score > heardScore) {
+              heard = r
+              heardP = p
+              heardScore = score
+            }
+          }
           tracks?.setBaseOwner(r.base, { name: p.username || 'Player', status: p.ride === 'crashed' ? 'Crashed!' : p.ride === 'foot' ? 'At the base' : 'On the line!' })
         } catch (err) {
           console.warn('[remote] update failed', err)
         }
       })
       if (!announced && t - joinedAt > 2.5) announced = true
+    },
+    // What audio/remote.js plays: the loudest riding remote cart, or null.
+    audioState() {
+      if (!heard) return null
+      const r = heard
+      const p = heardP
+      heardState.dist = r.dist
+      heardState.pan = r.pan
+      heardState.v = r.v
+      heardState.throttle = p.throttle ?? 0
+      heardState.engine = p.engine || ''
+      heardState.fuel = !!p.fuelOk && p.ride === 'riding'
+      heardState.air = !!p.air
+      heardState.closing = r.closing
+      return heardState
     },
   }
 }

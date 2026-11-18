@@ -532,7 +532,7 @@ function frame(forceDt, draw = true) {
   zones.update(dt)
   camera.getWorldPosition(camPos)
   // The other players of the room, and what we tell them.
-  remotes.update(dt, t, camPos, p, remoteVecs)
+  remotes.update(dt, t, camPos, p, remoteVecs, camera)
   presence.update(dt)
   route.update(dt, t, camPos.z, ride.cartS, ride.riding, lighting.nightLevel())
   tracks.update(dt, t)
@@ -559,7 +559,7 @@ function frame(forceDt, draw = true) {
   postfx.setBlur(ride.riding ? Math.min(1, Math.max(0, (speed - 30) / 70) + (ride.audioState().boosting ? 0.45 : 0)) : 0, dt)
 
   updateInteract(dt, p, camera, ride.riding || W.isWindowOpen())
-  updateAudio(dt, { cart: ride.audioState(), cave: indoor, rain: events.storm(), water: zones.waterAt(p), t, windowOpen: W.isWindowOpen() })
+  updateAudio(dt, { cart: ride.audioState(), remote: remotes.audioState(), cave: indoor, rain: events.storm(), water: zones.waterAt(p), t, windowOpen: W.isWindowOpen() })
 
   // Timers on signs and HUD, a few times a second.
   slowTick -= dt
